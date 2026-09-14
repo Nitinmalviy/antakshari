@@ -16,13 +16,11 @@ import {
   IAnswerSubmission,
   IBuzzerEvent,
   IBuzzerSession,
-  OptionId,
-  QuestionType,
 } from '@/types';
-import { PRESET_QUESTIONS, PresetQuestion } from '@/lib/questionsData';
-import { OPTION_IDS, getItemsInCorrectOrder, formatOrder } from '@/lib/orderQuestion';
+import { PRESET_QUESTIONS, PresetQuestion, shuffleQuestionOptions } from '@/lib/questionsData';
 import { sounds } from '@/lib/audio';
 import {
+  Shuffle,
   Shield,
   Plus,
   Play,
@@ -52,7 +50,6 @@ import {
   Edit3,
   Flame,
   UserCheck,
-  ListOrdered,
 } from 'lucide-react';
 
 // Helper to format timestamps gracefully
@@ -264,18 +261,16 @@ function HostDashboard() {
   const [optionB, setOptionB] = useState(PRESET_QUESTIONS[0].options[1].text);
   const [optionC, setOptionC] = useState(PRESET_QUESTIONS[0].options[2].text);
   const [optionD, setOptionD] = useState(PRESET_QUESTIONS[0].options[3].text);
-  const [correctAnswer, setCorrectAnswer] = useState<'A' | 'B' | 'C' | 'D'>(PRESET_QUESTIONS[0].correctAnswerId);
-  const [questionType, setQuestionType] = useState<QuestionType>('MCQ');
-  // ORDER questions: items typed in the CORRECT sequence (server shuffles them for players)
-  const [orderItems, setOrderItems] = useState<string[]>(['', '', '', '']);
+  const [correctAnswer, setCorrectAnswer] = useState<string>(PRESET_QUESTIONS[0].correctAnswerId);
   const [timeLimit, setTimeLimit] = useState(30);
   const [explanation, setExplanation] = useState(PRESET_QUESTIONS[0].explanation);
-  const [category, setCategory] = useState('General Knowledge');
+  const [category, setCategory] = useState('Fastest Finger First');
   const [round1Submissions, setRound1Submissions] = useState<IAnswerSubmission[]>([]);
   const [isRound1Revealed, setIsRound1Revealed] = useState(false);
 
   // Round 2+ Buzzer State (Unlimited questions / rounds)
   const [buzzerPrompt, setBuzzerPrompt] = useState('Who was the first person to walk on the Moon?');
+  const [buzzerTimeLimit, setBuzzerTimeLimit] = useState(30);
   const [buzzerSession, setBuzzerSession] = useState<IBuzzerSession | null>(null);
   const [buzzerEvents, setBuzzerEvents] = useState<IBuzzerEvent[]>([]);
   const [qualifyingCount, setQualifyingCount] = useState<number>(5);
@@ -542,21 +537,9 @@ function HostDashboard() {
     if (token) {
       setIsAuthVerified(true);
     } else {
-      fetch('/api/auth/host', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: 'rahul@admin.com', pin: '1234' }),
-      })
-        .then((res) => res.json())
-        .then((data) => {
-          if (data.token) {
-            localStorage.setItem('kbc_host_token', data.token);
-            setIsAuthVerified(true);
-          }
-        })
-        .catch(console.error);
+      router.push('/admin');
     }
-  }, []);
+  }, [router]);
 
   // Connect Host to WebSocket Room
   useEffect(() => {
@@ -567,59 +550,6 @@ function HostDashboard() {
       hostEmail: 'rahul@admin.com',
     });
   }, [socket, isConnected, isAuthVerified, gameCode, emit]);
-
-  // Load any question (live, saved or preset) into the composer
-  const fillEditorFromQuestion = (q: {
-    questionText: string;
-    questionType?: QuestionType;
-    options: { id: OptionId; text: string }[];
-    correctAnswerId: OptionId;
-    correctOrder?: OptionId[];
-    timeLimitSeconds: number;
-    explanation?: string;
-  }) => {
-    setQuestionText(q.questionText);
-    setQuestionType(q.questionType === 'ORDER' ? 'ORDER' : 'MCQ');
-    setOptionA(q.options[0]?.text || '');
-    setOptionB(q.options[1]?.text || '');
-    setOptionC(q.options[2]?.text || '');
-    setOptionD(q.options[3]?.text || '');
-    setCorrectAnswer(q.correctAnswerId);
-    if (q.questionType === 'ORDER') setOrderItems(getItemsInCorrectOrder(q));
-    setTimeLimit(q.timeLimitSeconds);
-    setExplanation(q.explanation || '');
-  };
-
-  const buildQuestionData = (): Partial<IQuestion> => {
-    const base = { questionText, questionType, timeLimitSeconds: timeLimit, explanation, category };
-    if (questionType === 'ORDER') {
-      return {
-        ...base,
-        options: orderItems.map((text, i) => ({ id: OPTION_IDS[i], text: text.trim() })),
-        correctAnswerId: 'A',
-        correctOrder: OPTION_IDS.slice(0, orderItems.length),
-      };
-    }
-    return {
-      ...base,
-      options: [
-        { id: 'A', text: optionA },
-        { id: 'B', text: optionB },
-        { id: 'C', text: optionC },
-        { id: 'D', text: optionD },
-      ],
-      correctAnswerId: correctAnswer,
-    };
-  };
-
-  const isQuestionDataValid = () => {
-    if (questionType === 'ORDER' && orderItems.some((item) => !item.trim())) {
-      notify('Fill all 4 items in the correct order before continuing.');
-      sounds.playWrong();
-      return false;
-    }
-    return true;
-  };
 
   // Socket Events
   useEffect(() => {
@@ -643,7 +573,14 @@ function HostDashboard() {
 
       if (data.activeQuestion) {
         setActiveQuestion(data.activeQuestion);
-        fillEditorFromQuestion(data.activeQuestion);
+        setQuestionText(data.activeQuestion.questionText);
+        setOptionA(data.activeQuestion.options[0]?.text || '');
+        setOptionB(data.activeQuestion.options[1]?.text || '');
+        setOptionC(data.activeQuestion.options[2]?.text || '');
+        setOptionD(data.activeQuestion.options[3]?.text || '');
+        setCorrectAnswer(data.activeQuestion.correctAnswerId);
+        setTimeLimit(data.activeQuestion.timeLimitSeconds);
+        setExplanation(data.activeQuestion.explanation || '');
       }
 
       if (data.buzzerSession) {
@@ -684,7 +621,14 @@ function HostDashboard() {
       }
       if (data.activeQuestion) {
         setActiveQuestion(data.activeQuestion);
-        fillEditorFromQuestion(data.activeQuestion);
+        setQuestionText(data.activeQuestion.questionText);
+        setOptionA(data.activeQuestion.options[0]?.text || '');
+        setOptionB(data.activeQuestion.options[1]?.text || '');
+        setOptionC(data.activeQuestion.options[2]?.text || '');
+        setOptionD(data.activeQuestion.options[3]?.text || '');
+        setCorrectAnswer(data.activeQuestion.correctAnswerId);
+        setTimeLimit(data.activeQuestion.timeLimitSeconds);
+        setExplanation(data.activeQuestion.explanation || '');
       }
       if (data.buzzerSession) {
         setBuzzerSession(data.buzzerSession);
@@ -697,15 +641,10 @@ function HostDashboard() {
       setSavedQuestions(questions || []);
     };
 
-    // Full question (with answer key and the shuffled letters players see)
-    const handleQuestionStarted = (question: IQuestion) => {
-      setActiveQuestion(question);
-    };
-
     const handleRound1Results = (data: {
       submissions: IAnswerSubmission[];
       isRevealed: boolean;
-      correctAnswerId?: 'A' | 'B' | 'C' | 'D';
+      correctAnswerId?: string;
     }) => {
       setRound1Submissions(data.submissions || []);
       if (data.isRevealed) {
@@ -721,7 +660,7 @@ function HostDashboard() {
       notify(`⚡ Buzzer pressed by ${data.latestEvent.candidateName} (Rank #${data.latestEvent.rank} • ${data.latestEvent.elapsedSecondsFormatted})`);
     };
 
-    const handleBuzzerStarted = (data: { status: 'ACTIVE'; enabledAt: number; prompt?: string }) => {
+    const handleBuzzerStarted = (data: { status: 'ACTIVE'; enabledAt: number; prompt?: string; timeLimitSeconds?: number }) => {
       setBuzzerSession((prev) => ({
         _id: prev?._id || '',
         gameId: prev?.gameId || '',
@@ -729,6 +668,7 @@ function HostDashboard() {
         events: [],
         status: 'ACTIVE',
         enabledAt: data.enabledAt,
+        timeLimitSeconds: data.timeLimitSeconds || buzzerTimeLimit,
         questionPrompt: data.prompt,
       }));
       setBuzzerEvents([]);
@@ -752,7 +692,6 @@ function HostDashboard() {
     socket.on(SOCKET_EVENTS.ROUNDS_UPDATED, handleRoundsUpdated);
     socket.on(SOCKET_EVENTS.ROUND_SELECTED, handleRoundSelected);
     socket.on(SOCKET_EVENTS.ROUND1_QUESTIONS_LIST, handleQuestionsList);
-    socket.on(SOCKET_EVENTS.ROUND1_QUESTION_STARTED, handleQuestionStarted);
     socket.on(SOCKET_EVENTS.ROUND1_RESULTS_UPDATED, handleRound1Results);
     socket.on(SOCKET_EVENTS.ROUND2_RANKING_UPDATED, handleBuzzerRankingUpdate);
     socket.on(SOCKET_EVENTS.ROUND2_START_BUZZER, handleBuzzerStarted);
@@ -765,7 +704,6 @@ function HostDashboard() {
       socket.off(SOCKET_EVENTS.ROUNDS_UPDATED, handleRoundsUpdated);
       socket.off(SOCKET_EVENTS.ROUND_SELECTED, handleRoundSelected);
       socket.off(SOCKET_EVENTS.ROUND1_QUESTIONS_LIST, handleQuestionsList);
-      socket.off(SOCKET_EVENTS.ROUND1_QUESTION_STARTED, handleQuestionStarted);
       socket.off(SOCKET_EVENTS.ROUND1_RESULTS_UPDATED, handleRound1Results);
       socket.off(SOCKET_EVENTS.ROUND2_RANKING_UPDATED, handleBuzzerRankingUpdate);
       socket.off(SOCKET_EVENTS.ROUND2_START_BUZZER, handleBuzzerStarted);
@@ -862,7 +800,14 @@ function HostDashboard() {
 
   // Load Preset Question into Round 1 Editor & Broadcast to Candidates
   const handleLoadPreset = (preset: PresetQuestion) => {
-    fillEditorFromQuestion(preset);
+    setQuestionText(preset.questionText);
+    setOptionA(preset.options[0].text);
+    setOptionB(preset.options[1].text);
+    setOptionC(preset.options[2].text);
+    setOptionD(preset.options[3].text);
+    setCorrectAnswer(preset.correctAnswerId);
+    setTimeLimit(preset.timeLimitSeconds);
+    setExplanation(preset.explanation);
     setCategory(preset.category);
     sounds.playLock();
 
@@ -872,10 +817,8 @@ function HostDashboard() {
         roundId: currentRound._id,
         questionData: {
           questionText: preset.questionText,
-          questionType: preset.questionType || 'MCQ',
           options: preset.options,
           correctAnswerId: preset.correctAnswerId,
-          correctOrder: preset.correctOrder,
           timeLimitSeconds: preset.timeLimitSeconds,
           explanation: preset.explanation,
           category: preset.category,
@@ -886,9 +829,56 @@ function HostDashboard() {
     notify(`Loaded preset: "${preset.questionText.slice(0, 30)}..."`);
   };
 
+  // Shuffle options order and automatically recompute matching correct sequence
+  const handleShuffleOptions = () => {
+    const currentOpts: { id: 'A' | 'B' | 'C' | 'D'; text: string }[] = [
+      { id: 'A', text: optionA },
+      { id: 'B', text: optionB },
+      { id: 'C', text: optionC },
+      { id: 'D', text: optionD },
+    ];
+    const { shuffledOptions, newCorrectSequence } = shuffleQuestionOptions(currentOpts, correctAnswer);
+
+    const optA = shuffledOptions.find((o) => o.id === 'A')?.text || '';
+    const optB = shuffledOptions.find((o) => o.id === 'B')?.text || '';
+    const optC = shuffledOptions.find((o) => o.id === 'C')?.text || '';
+    const optD = shuffledOptions.find((o) => o.id === 'D')?.text || '';
+
+    setOptionA(optA);
+    setOptionB(optB);
+    setOptionC(optC);
+    setOptionD(optD);
+    setCorrectAnswer(newCorrectSequence);
+    sounds.playLock();
+
+    if (game && currentRound) {
+      emit(SOCKET_EVENTS.ROUND1_UPDATE_QUESTION, {
+        gameId: game._id,
+        roundId: currentRound._id,
+        questionData: {
+          questionText,
+          options: shuffledOptions,
+          correctAnswerId: newCorrectSequence,
+          timeLimitSeconds: timeLimit,
+          explanation,
+          category,
+        },
+      });
+    }
+
+    notify(`🎲 Shuffled options! New correct sequence: ${newCorrectSequence}`);
+  };
+
   // Load Question from Saved MongoDB Bank
   const handleLoadSavedQuestion = (q: IQuestion) => {
-    fillEditorFromQuestion(q);
+    setQuestionText(q.questionText);
+    setOptionA(q.options[0]?.text || '');
+    setOptionB(q.options[1]?.text || '');
+    setOptionC(q.options[2]?.text || '');
+    setOptionD(q.options[3]?.text || '');
+    setCorrectAnswer(q.correctAnswerId);
+    setTimeLimit(q.timeLimitSeconds);
+    setExplanation(q.explanation || '');
     setCategory(q.category || 'Round 1 Question');
     sounds.playLock();
 
@@ -898,10 +888,8 @@ function HostDashboard() {
         roundId: currentRound._id,
         questionData: {
           questionText: q.questionText,
-          questionType: q.questionType || 'MCQ',
           options: q.options,
           correctAnswerId: q.correctAnswerId,
-          correctOrder: q.correctOrder,
           timeLimitSeconds: q.timeLimitSeconds,
           explanation: q.explanation,
           category: q.category,
@@ -914,9 +902,21 @@ function HostDashboard() {
 
   // Save Current Question to MongoDB Bank for Round 1
   const handleSaveQuestionToBank = () => {
-    if (!game || !currentRound || !isQuestionDataValid()) return;
+    if (!game || !currentRound) return;
 
-    const questionData = buildQuestionData();
+    const questionData: Partial<IQuestion> = {
+      questionText,
+      options: [
+        { id: 'A', text: optionA },
+        { id: 'B', text: optionB },
+        { id: 'C', text: optionC },
+        { id: 'D', text: optionD },
+      ],
+      correctAnswerId: correctAnswer,
+      timeLimitSeconds: timeLimit,
+      explanation,
+      category,
+    };
 
     emit(SOCKET_EVENTS.ROUND1_SAVE_QUESTION, {
       gameId: game._id,
@@ -929,9 +929,21 @@ function HostDashboard() {
 
   // Push / Update Question to Candidates in Real-Time
   const handleUpdateQuestion = () => {
-    if (!game || !currentRound || !isQuestionDataValid()) return;
+    if (!game || !currentRound) return;
 
-    const questionData = buildQuestionData();
+    const questionData: Partial<IQuestion> = {
+      questionText,
+      options: [
+        { id: 'A', text: optionA },
+        { id: 'B', text: optionB },
+        { id: 'C', text: optionC },
+        { id: 'D', text: optionD },
+      ],
+      correctAnswerId: correctAnswer,
+      timeLimitSeconds: timeLimit,
+      explanation,
+      category,
+    };
 
     emit(SOCKET_EVENTS.ROUND1_UPDATE_QUESTION, {
       gameId: game._id,
@@ -944,9 +956,21 @@ function HostDashboard() {
 
   // Round 1 Controls
   const handleStartQuestion = () => {
-    if (!game || !currentRound || !isQuestionDataValid()) return;
+    if (!game || !currentRound) return;
 
-    const questionData = buildQuestionData();
+    const questionData: Partial<IQuestion> = {
+      questionText,
+      options: [
+        { id: 'A', text: optionA },
+        { id: 'B', text: optionB },
+        { id: 'C', text: optionC },
+        { id: 'D', text: optionD },
+      ],
+      correctAnswerId: correctAnswer,
+      timeLimitSeconds: timeLimit,
+      explanation,
+      category,
+    };
 
     setIsRound1Revealed(false);
     setRound1Submissions([]);
@@ -968,11 +992,15 @@ function HostDashboard() {
   };
 
   const handleRevealRound1Results = () => {
-    if (!game || !activeQuestion) return;
+    if (!game) return;
+    setIsRound1Revealed(true);
+    sounds.playCorrect();
+    setShowConfetti(true);
     emit(SOCKET_EVENTS.ROUND1_REVEAL_RESULTS, {
       gameId: game._id,
-      questionId: activeQuestion._id,
+      questionId: activeQuestion?._id,
     });
+    notify('Question 1 results and correct sequence revealed to all players!');
   };
 
   // Round 2+ Buzzer Controls (Unlimited buzzers / questions)
@@ -982,6 +1010,7 @@ function HostDashboard() {
       gameId: game._id,
       roundId: currentRound._id,
       prompt: buzzerPrompt,
+      timeLimitSeconds: buzzerTimeLimit,
     });
   };
 
@@ -1084,9 +1113,17 @@ function HostDashboard() {
 
 
   const handleDeclareWinner = () => {
+    if (!game) return;
     setShowConfetti(true);
     sounds.playCorrect();
-    notify('🎉 Champion & Winners declared! Grand celebration triggered!');
+    const sorted = [...candidates].sort((a, b) => (b.score || 0) - (a.score || 0));
+    const winner = sorted[0] || null;
+    emit(SOCKET_EVENTS.DECLARE_WINNER, {
+      gameId: game._id,
+      winner,
+      standings: sorted,
+    });
+    notify('🎉 Champion & Winners declared! Grand celebration broadcasted to all screens!');
   };
 
   const isRound1 = currentRound?.type === 'QUESTION' || currentRound?.roundNumber === 1;
@@ -1256,10 +1293,10 @@ function HostDashboard() {
                 <div className="flex items-center gap-2">
                   <button
                     onClick={handleDeclareWinner}
-                    className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-white font-black text-xs uppercase flex items-center gap-1.5 shadow-[0_0_15px_rgba(16,185,129,0.3)] cursor-pointer"
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-400 hover:to-emerald-500 text-white font-black text-xs uppercase flex items-center gap-1.5 shadow-[0_0_20px_rgba(16,185,129,0.4)] hover:scale-105 transition-all cursor-pointer"
                   >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>Celebrate Winner!</span>
+                    <Sparkles className="w-4 h-4" />
+                    <span>Celebrate Winner & Reveal Results! 🏆</span>
                   </button>
                   <button
                     onClick={() => setShowStandingsModal(false)}
@@ -1746,10 +1783,7 @@ function HostDashboard() {
                                   {sq.questionText}
                                 </span>
                                 <span className="text-[10px] text-slate-400">
-                                  {sq.category || 'General'} •{' '}
-                                  {sq.questionType === 'ORDER'
-                                    ? `Arrange: ${getItemsInCorrectOrder(sq).join(' → ')}`
-                                    : `Correct: (${sq.correctAnswerId})`}
+                                  {sq.category || 'General'} • Correct: ({sq.correctAnswerId})
                                 </span>
                               </div>
                               <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-emerald-400 flex-shrink-0" />
@@ -1776,8 +1810,7 @@ function HostDashboard() {
                                 {preset.questionText}
                               </span>
                               <span className="text-[10px] text-slate-400">
-                                {preset.category} •{' '}
-                                {preset.questionType === 'ORDER' ? 'Arrange in Order' : `Correct: (${preset.correctAnswerId})`}
+                                {preset.category} • Correct: ({preset.correctAnswerId})
                               </span>
                             </div>
                             <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-amber-400 flex-shrink-0" />
@@ -1798,36 +1831,6 @@ function HostDashboard() {
                       </span>
                     </div>
 
-                    {/* Question Type */}
-                    <div>
-                      <label className="block text-xs font-bold uppercase text-slate-300 mb-1.5">
-                        Question Type
-                      </label>
-                      <div className="grid grid-cols-2 gap-2">
-                        {([
-                          { type: 'MCQ', label: 'Multiple Choice', hint: 'Pick 1 correct option' },
-                          { type: 'ORDER', label: 'Arrange in Order', hint: 'Fastest Finger First' },
-                        ] as const).map((t) => (
-                          <button
-                            key={t.type}
-                            type="button"
-                            onClick={() => setQuestionType(t.type)}
-                            className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                              questionType === t.type
-                                ? 'bg-amber-500/20 border-amber-400 text-amber-200 shadow-[0_0_12px_rgba(245,158,11,0.25)]'
-                                : 'bg-slate-950/70 border-slate-700 text-slate-400 hover:border-slate-500'
-                            }`}
-                          >
-                            <div className="text-xs font-black uppercase flex items-center gap-1.5">
-                              {t.type === 'ORDER' ? <ListOrdered className="w-4 h-4" /> : <HelpCircle className="w-4 h-4" />}
-                              <span>{t.label}</span>
-                            </div>
-                            <div className="text-[10px] mt-0.5 opacity-80">{t.hint}</div>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
                     <div>
                       <label className="block text-xs font-bold uppercase text-slate-300 mb-1">
                         Question Text
@@ -1841,37 +1844,22 @@ function HostDashboard() {
                       />
                     </div>
 
-                    {/* ORDER: items in the correct sequence */}
-                    {questionType === 'ORDER' && (
-                      <div className="space-y-2">
-                        <div className="p-3 rounded-xl bg-amber-950/30 border border-amber-500/25 text-[11px] text-amber-200/90">
-                          Type the 4 items in the <strong>CORRECT order</strong> (1st → 4th). Players will see them
-                          shuffled as A, B, C, D and must tap them in the right sequence before the timer ends.
-                          Fastest correct order ranks #1.
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          {orderItems.map((item, i) => (
-                            <div key={i}>
-                              <label className="block text-xs font-bold text-slate-400 mb-1">
-                                {['1st', '2nd', '3rd', '4th'][i]} (position {i + 1})
-                              </label>
-                              <input
-                                type="text"
-                                value={item}
-                                onChange={(e) =>
-                                  setOrderItems((prev) => prev.map((v, idx) => (idx === i ? e.target.value : v)))
-                                }
-                                placeholder={`Item that comes ${['first', 'second', 'third', 'fourth'][i]}`}
-                                className="w-full px-3.5 py-2 rounded-lg bg-slate-950/80 border border-slate-700 text-sm text-slate-100 focus:outline-none focus:border-amber-400"
-                              />
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="text-xs font-bold uppercase text-slate-300">
+                        4 Options (Fastest Finger First)
+                      </label>
+                      <button
+                        type="button"
+                        onClick={handleShuffleOptions}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-purple-950 via-indigo-950 to-slate-900 border border-purple-500/50 hover:border-purple-400 text-purple-200 hover:text-white text-xs font-bold transition-all shadow-md active:scale-95 cursor-pointer"
+                        title="Randomly shuffle options placement and automatically recompute correct sequence"
+                      >
+                        <Shuffle className="w-3.5 h-3.5 text-purple-400" />
+                        <span>🎲 Shuffle Options Order (Randomize Sequence)</span>
+                      </button>
+                    </div>
 
                     {/* 4 Options */}
-                    {questionType === 'MCQ' && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {(['A', 'B', 'C', 'D'] as const).map((opt) => {
                         const val = opt === 'A' ? optionA : opt === 'B' ? optionB : opt === 'C' ? optionC : optionD;
@@ -1880,48 +1868,63 @@ function HostDashboard() {
                         return (
                           <div key={opt} className="relative">
                             <label className="block text-xs font-bold text-slate-400 mb-1 flex items-center justify-between">
-                              <span>Option {opt}</span>
-                              <span className="flex items-center gap-1 text-[11px] text-amber-400 cursor-pointer">
-                                <input
-                                  type="radio"
-                                  name="correctAnswer"
-                                  checked={correctAnswer === opt}
-                                  onChange={() => setCorrectAnswer(opt)}
-                                  className="accent-amber-400 cursor-pointer"
-                                  title="Set as correct answer"
-                                />
-                                <span>Correct</span>
-                              </span>
+                              <span className="text-amber-400 font-black">Option {opt}</span>
                             </label>
                             <input
                               type="text"
                               value={val}
                               onChange={(e) => setVal(e.target.value)}
-                              className={`w-full px-3.5 py-2 rounded-lg bg-slate-950/80 border text-sm text-slate-100 focus:outline-none ${
-                                correctAnswer === opt ? 'border-amber-400 ring-1 ring-amber-400/40' : 'border-slate-700'
-                              }`}
+                              placeholder={`Enter text for Option ${opt}`}
+                              className="w-full px-3.5 py-2 rounded-lg bg-slate-950/80 border border-slate-700 text-sm text-slate-100 focus:outline-none focus:border-amber-400"
                             />
                           </div>
                         );
                       })}
                     </div>
-                    )}
 
-                    {/* Live shuffle on players' screens + answer key */}
-                    {activeQuestion?.questionType === 'ORDER' && activeQuestion.correctOrder && (
-                      <div className="p-3 rounded-xl bg-slate-950/80 border border-emerald-500/30 text-xs space-y-1.5">
-                        <div className="font-bold uppercase text-emerald-400">
-                          Live on players&apos; screens • Answer key: {formatOrder(activeQuestion.correctOrder)}
-                        </div>
-                        <div className="grid grid-cols-2 gap-1 text-slate-300">
-                          {activeQuestion.options.map((o) => (
-                            <span key={o.id}>
-                              <strong className="text-amber-400">{o.id}.</strong> {o.text}
-                            </span>
+                    {/* Fastest Finger First Correct Sequence Control */}
+                    <div className="p-4 rounded-xl bg-slate-950/90 border border-amber-500/40 space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <label className="text-xs font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
+                          <Sparkles className="w-4 h-4 text-amber-400" />
+                          <span>Fastest Finger First • Correct Sequence Order</span>
+                        </label>
+                        <span className="text-xs font-mono text-amber-300 font-bold bg-amber-500/10 px-2.5 py-0.5 rounded-full border border-amber-500/30">
+                          Active: {correctAnswer}
+                        </span>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          type="text"
+                          value={correctAnswer}
+                          onChange={(e) => setCorrectAnswer(e.target.value.toUpperCase())}
+                          placeholder="e.g. B-D-A-C"
+                          className="px-3.5 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm font-mono font-bold text-amber-300 uppercase focus:outline-none focus:border-amber-400 min-w-[160px]"
+                        />
+
+                        <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
+                          <span className="text-[11px] uppercase font-bold text-slate-500">Quick Combinations:</span>
+                          {['B-D-A-C', 'C-A-D-B', 'C-D-A-B', 'B-D-C-A', 'B-A-D-C', 'B-C-A-D', 'D-B-A-C', 'A-C-B-D'].map((seq) => (
+                            <button
+                              key={seq}
+                              type="button"
+                              onClick={() => setCorrectAnswer(seq)}
+                              className={`px-2 py-1 rounded font-mono text-xs font-bold transition-all cursor-pointer ${
+                                correctAnswer === seq
+                                  ? 'bg-amber-400 text-slate-950 shadow-md scale-105'
+                                  : 'bg-slate-800 text-slate-300 hover:text-amber-400 border border-slate-700'
+                              }`}
+                            >
+                              {seq}
+                            </button>
                           ))}
                         </div>
                       </div>
-                    )}
+                      <p className="text-[11px] text-slate-400">
+                        Candidates will tap the options in order to match this sequence. You can also click <strong>🎲 Shuffle Options Order</strong> to randomize the positions.
+                      </p>
+                    </div>
 
                     {/* Time limit & explanation */}
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -2040,8 +2043,8 @@ function HostDashboard() {
                             </div>
 
                             <div className="flex items-center gap-2">
-                              <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 font-black font-mono text-[11px] text-amber-400">
-                                {sub.submittedOrder ? sub.submittedOrder.join('') : sub.selectedOptionId}
+                              <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 font-black text-[11px] text-amber-400">
+                                {sub.selectedOptionId}
                               </span>
                               <span className="font-mono text-slate-400 text-[11px]">
                                 {(sub.responseTimeMs / 1000).toFixed(3)}s
@@ -2108,6 +2111,41 @@ function HostDashboard() {
                     <span>
                       <strong className="text-amber-400">Host-Led Question:</strong> No question is shown on candidate screens. Host reads out the question verbally. Click <strong>START BUZZER</strong> to open buzzing for all candidates.
                     </span>
+                  </div>
+
+                  {/* ⏱ Buzzer Round Timer Control */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-950/80 border border-slate-800">
+                    <div className="flex items-center gap-2">
+                      <Clock className="w-4 h-4 text-amber-400" />
+                      <label className="text-xs font-bold uppercase text-slate-300">
+                        Player Buzzer Timer:
+                      </label>
+                      <select
+                        value={buzzerTimeLimit}
+                        onChange={(e) => setBuzzerTimeLimit(Number(e.target.value))}
+                        disabled={buzzerSession?.status === 'ACTIVE'}
+                        className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs font-mono font-bold text-amber-300 focus:outline-none focus:border-amber-400 cursor-pointer"
+                      >
+                        <option value={15}>15 Seconds</option>
+                        <option value={30}>30 Seconds (Default)</option>
+                        <option value={45}>45 Seconds</option>
+                        <option value={60}>60 Seconds</option>
+                      </select>
+                    </div>
+
+                    {buzzerSession?.status === 'ACTIVE' && buzzerSession?.enabledAt && (
+                      <div className="flex items-center gap-2">
+                        <TimerDisplay
+                          startedAt={buzzerSession.enabledAt}
+                          timeLimitSeconds={buzzerTimeLimit}
+                          isActive={true}
+                          size="sm"
+                        />
+                        <span className="text-[11px] font-mono text-emerald-400 font-bold animate-pulse">
+                          LIVE BUZZER TIMER RUNNING
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   {/* Primary Action Buttons — Smart enable/disable */}

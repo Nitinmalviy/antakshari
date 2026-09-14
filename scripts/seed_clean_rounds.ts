@@ -52,21 +52,21 @@ async function run() {
 
   const round1Id = round1Res.insertedId;
 
-  // Create Question for Round 1
+  // Create Question for Round 1 (Fastest Finger First)
   await m.connection.db.collection('questions').insertOne({
     gameId: gameId,
     roundId: round1Id,
-    questionText: 'Which is the sacred pilgrimage and meditation shrine of Lord Mahavira situated in Dewas, Madhya Pradesh?',
+    questionText: 'Starting from North to South, arrange these Indian cities in correct geographical order:',
     options: [
-      { id: 'A', text: 'Mahaveer Dham Dewas' },
-      { id: 'B', text: 'Kundalpur Tirtha' },
-      { id: 'C', text: 'Gommatgiri Shrine' },
-      { id: 'D', text: 'Bawan Gaja Temple' }
+      { id: 'A', text: 'Bhopal' },
+      { id: 'B', text: 'Srinagar' },
+      { id: 'C', text: 'Chennai' },
+      { id: 'D', text: 'New Delhi' }
     ],
-    correctAnswerId: 'A',
+    correctAnswerId: 'B-D-A-C',
     timeLimitSeconds: 30,
-    category: 'Spiritual Heritage',
-    explanation: 'Mahaveer Dham Dewas is the revered pilgrimage and meditation shrine dedicated to Bhagwan Mahavira.',
+    category: 'Fastest Finger First • Geography',
+    explanation: 'Srinagar (B in J&K) is in North India, followed southwards by New Delhi (D), Bhopal (A in Madhya Pradesh), and Chennai (C in Tamil Nadu).',
     status: 'PENDING',
     createdAt: new Date(),
     updatedAt: new Date(),

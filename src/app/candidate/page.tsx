@@ -1,11 +1,10 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, Suspense } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useSocket } from '@/lib/useSocket';
 import { Header } from '@/components/Header';
 import { QuestionCard } from '@/components/QuestionCard';
-import { OrderQuestionCard } from '@/components/OrderQuestionCard';
 import { BuzzerButton } from '@/components/BuzzerButton';
 import { TimerDisplay } from '@/components/TimerDisplay';
 import { ConfettiCelebration } from '@/components/ConfettiCelebration';
@@ -18,7 +17,6 @@ import {
   IAnswerSubmission,
   IBuzzerEvent,
   IBuzzerSession,
-  OptionId,
 } from '@/types';
 import { sounds } from '@/lib/audio';
 import { Users, AlertTriangle, Trophy, Sparkles, CheckCircle2, Wifi, Loader2, ArrowRight } from 'lucide-react';
@@ -46,14 +44,11 @@ function CandidateArena() {
   const [buzzerSession, setBuzzerSession] = useState<IBuzzerSession | null>(null);
 
   // Candidate personal state
-  const [selectedOption, setSelectedOption] = useState<'A' | 'B' | 'C' | 'D' | null>(null);
-  const [arrangedOrder, setArrangedOrder] = useState<OptionId[]>([]);
-  const [isTimeUp, setIsTimeUp] = useState(false);
+  const [selectedOption, setSelectedOption] = useState<string | null>(null);
   const [isAnswerSubmitted, setIsAnswerSubmitted] = useState(false);
   const [isRound1Revealed, setIsRound1Revealed] = useState(false);
   const [round1Results, setRound1Results] = useState<{
-    correctAnswerId?: 'A' | 'B' | 'C' | 'D';
-    correctOrder?: OptionId[];
+    correctAnswerId?: string;
     explanation?: string;
     submissions?: IAnswerSubmission[];
   } | null>(null);
@@ -61,6 +56,7 @@ function CandidateArena() {
   const [candidateBuzzerEvent, setCandidateBuzzerEvent] = useState<IBuzzerEvent | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [showConfetti, setShowConfetti] = useState(false);
+  const [winnerData, setWinnerData] = useState<{ winner: ICandidate; standings: ICandidate[] } | null>(null);
 
   // Direct Join Function via REST API + WebSocket
   const performJoin = async (nameToJoin: string, codeToJoin: string) => {
@@ -185,12 +181,10 @@ function CandidateArena() {
       }
 
       if (data.candidateSubmission) {
-        setSelectedOption(data.candidateSubmission.selectedOptionId || null);
-        setArrangedOrder(data.candidateSubmission.submittedOrder || []);
+        setSelectedOption(data.candidateSubmission.selectedOptionId);
         setIsAnswerSubmitted(true);
       } else {
         setSelectedOption(null);
-        setArrangedOrder([]);
         setIsAnswerSubmitted(false);
       }
 
@@ -213,25 +207,21 @@ function CandidateArena() {
     const handleQuestionStarted = (question: IQuestion) => {
       setActiveQuestion(question);
       setSelectedOption(null);
-      setArrangedOrder([]);
-      setIsTimeUp(false);
       setIsAnswerSubmitted(false);
       setIsRound1Revealed(false);
       setRound1Results(null);
       sounds.playLock();
     };
 
-    const handleAnswerRecorded = (data: { selectedOptionId?: OptionId; submittedOrder?: OptionId[]; responseTimeMs: number }) => {
-      setSelectedOption(data.selectedOptionId || null);
-      if (data.submittedOrder) setArrangedOrder(data.submittedOrder);
+    const handleAnswerRecorded = (data: { selectedOptionId: 'A' | 'B' | 'C' | 'D'; responseTimeMs: number }) => {
+      setSelectedOption(data.selectedOptionId);
       setIsAnswerSubmitted(true);
       sounds.playLock();
     };
 
     const handleRound1Results = (data: {
       questionId: string;
-      correctAnswerId: 'A' | 'B' | 'C' | 'D';
-      correctOrder?: OptionId[];
+      correctAnswerId: string;
       explanation?: string;
       submissions: IAnswerSubmission[];
     }) => {
@@ -248,7 +238,7 @@ function CandidateArena() {
     };
 
     // Round 2+ Buzzer Events
-    const handleBuzzerStarted = (data: { status: 'ACTIVE'; enabledAt: number; prompt?: string }) => {
+    const handleBuzzerStarted = (data: { status: 'ACTIVE'; enabledAt: number; prompt?: string; timeLimitSeconds?: number }) => {
       setBuzzerSession((prev) => ({
         _id: prev?._id || '',
         gameId: prev?.gameId || '',
@@ -256,6 +246,7 @@ function CandidateArena() {
         events: [],
         status: 'ACTIVE',
         enabledAt: data.enabledAt,
+        timeLimitSeconds: data.timeLimitSeconds || 30,
         questionPrompt: data.prompt,
       }));
       setCandidateBuzzerEvent(null);
@@ -289,12 +280,16 @@ function CandidateArena() {
       setActiveQuestion(data.activeQuestion);
       setBuzzerSession(data.buzzerSession);
       setSelectedOption(null);
-      setArrangedOrder([]);
-      setIsTimeUp(false);
       setIsAnswerSubmitted(false);
       setIsRound1Revealed(false);
       setRound1Results(null);
       setCandidateBuzzerEvent(null);
+    };
+
+    const handleWinnerDeclared = (data: { winner: ICandidate; standings: ICandidate[] }) => {
+      setWinnerData(data);
+      setShowConfetti(true);
+      sounds.playCorrect();
     };
 
     const handleError = (data: { message: string }) => {
@@ -312,6 +307,8 @@ function CandidateArena() {
     socket.on(SOCKET_EVENTS.ROUND2_STOP_BUZZER, handleBuzzerStopped);
     socket.on(SOCKET_EVENTS.ROUND2_RESET_BUZZER, handleBuzzerReset);
     socket.on(SOCKET_EVENTS.ROUND_SELECTED, handleRoundSelected);
+    socket.on(SOCKET_EVENTS.WINNER_DECLARED, handleWinnerDeclared);
+    socket.on(SOCKET_EVENTS.DECLARE_WINNER, handleWinnerDeclared);
     socket.on(SOCKET_EVENTS.ERROR, handleError);
 
     return () => {
@@ -325,19 +322,22 @@ function CandidateArena() {
       socket.off(SOCKET_EVENTS.ROUND2_STOP_BUZZER, handleBuzzerStopped);
       socket.off(SOCKET_EVENTS.ROUND2_RESET_BUZZER, handleBuzzerReset);
       socket.off(SOCKET_EVENTS.ROUND_SELECTED, handleRoundSelected);
+      socket.off(SOCKET_EVENTS.WINNER_DECLARED, handleWinnerDeclared);
+      socket.off(SOCKET_EVENTS.DECLARE_WINNER, handleWinnerDeclared);
       socket.off(SOCKET_EVENTS.ERROR, handleError);
     };
   }, [socket, candidateId]);
 
-  // Round 1: Select Option (Candidate can change options freely before submitting!)
-  const handleSelectOption = (optionId: 'A' | 'B' | 'C' | 'D') => {
+  // Round 1: Select Option or Sequence
+  const handleSelectOption = (optionId: string) => {
     if (isAnswerSubmitted) return;
     setSelectedOption(optionId);
   };
 
   // Round 1: Explicit Lock & Submit Answer Action
-  const handleSubmitAnswer = () => {
-    if (!game || !currentRound || !activeQuestion || isAnswerSubmitted || !selectedOption || !candidateId) return;
+  const handleSubmitAnswer = (sequenceStr?: string) => {
+    const finalAnswer = sequenceStr || selectedOption;
+    if (!game || !currentRound || !activeQuestion || isAnswerSubmitted || !finalAnswer || !candidateId) return;
 
     setIsAnswerSubmitted(true);
     emit(SOCKET_EVENTS.ROUND1_SUBMIT_ANSWER, {
@@ -345,31 +345,9 @@ function CandidateArena() {
       roundId: currentRound._id,
       questionId: activeQuestion._id,
       candidateId,
-      selectedOptionId: selectedOption,
+      selectedOptionId: finalAnswer,
     });
   };
-
-  // Round 1 (ORDER question): lock the arranged sequence
-  const handleSubmitOrder = () => {
-    if (!game || !currentRound || !activeQuestion || isAnswerSubmitted || isTimeUp || !candidateId) return;
-    if (arrangedOrder.length !== activeQuestion.options.length) return;
-
-    setIsAnswerSubmitted(true);
-    emit(SOCKET_EVENTS.ROUND1_SUBMIT_ANSWER, {
-      gameId: game._id,
-      roundId: currentRound._id,
-      questionId: activeQuestion._id,
-      candidateId,
-      submittedOrder: arrangedOrder,
-    });
-  };
-
-  const handleTimerExpire = useCallback(() => setIsTimeUp(true), []);
-
-  // Reset the time-up lock whenever a question is (re)started
-  useEffect(() => {
-    setIsTimeUp(false);
-  }, [activeQuestion?._id, activeQuestion?.startedAt]);
 
   // Round 2+: Press Buzzer
   const handlePressBuzzer = () => {
@@ -556,36 +534,22 @@ function CandidateArena() {
                           startedAt={activeQuestion.startedAt}
                           timeLimitSeconds={activeQuestion.timeLimitSeconds}
                           isActive={activeQuestion.status === 'ACTIVE' && !isAnswerSubmitted}
-                          onExpire={handleTimerExpire}
                           size="lg"
                         />
                       </div>
                     )}
 
                     {/* Question Card */}
-                    {activeQuestion.questionType === 'ORDER' ? (
-                      <OrderQuestionCard
-                        question={activeQuestion}
-                        arrangedOrder={arrangedOrder}
-                        onChangeOrder={setArrangedOrder}
-                        onSubmitOrder={handleSubmitOrder}
-                        isSubmitted={isAnswerSubmitted}
-                        isRevealed={isRound1Revealed}
-                        isTimeUp={isTimeUp || activeQuestion.status === 'CLOSED'}
-                        correctOrder={round1Results?.correctOrder}
-                      />
-                    ) : (
-                      <QuestionCard
-                        question={activeQuestion}
-                        selectedOption={selectedOption}
-                        onSelectOption={handleSelectOption}
-                        onSubmitAnswer={handleSubmitAnswer}
-                        showSubmitButton={true}
-                        isSubmitted={isAnswerSubmitted}
-                        isRevealed={isRound1Revealed}
-                        correctAnswerId={round1Results?.correctAnswerId}
-                      />
-                    )}
+                    <QuestionCard
+                      question={activeQuestion}
+                      selectedOption={selectedOption}
+                      onSelectOption={handleSelectOption}
+                      onSubmitAnswer={handleSubmitAnswer}
+                      showSubmitButton={true}
+                      isSubmitted={isAnswerSubmitted}
+                      isRevealed={isRound1Revealed}
+                      correctAnswerId={round1Results?.correctAnswerId}
+                    />
 
                     {/* Personal Rank on Reveal */}
                     {isRound1Revealed && round1Results && (
@@ -605,13 +569,16 @@ function CandidateArena() {
                               <div className="text-xl font-bold flex items-center justify-center gap-2">
                                 {mySub.isCorrect ? (
                                   <span className="text-emerald-400 flex items-center gap-1.5">
-                                    <CheckCircle2 className="w-5 h-5" /> {mySub.submittedOrder ? 'CORRECT ORDER!' : 'CORRECT ANSWER!'}
+                                    <CheckCircle2 className="w-5 h-5" /> CORRECT SEQUENCE!
                                   </span>
                                 ) : (
-                                  <span className="text-rose-400">{mySub.submittedOrder ? 'WRONG ORDER' : 'INCORRECT ANSWER'}</span>
+                                  <span className="text-rose-400">INCORRECT SEQUENCE</span>
                                 )}
                               </div>
-                              <div className="flex items-center justify-center gap-6 text-sm">
+                              <div className="text-xs text-amber-400 font-mono font-bold">
+                                Your Submitted Sequence: {mySub.selectedOptionId}
+                              </div>
+                              <div className="flex items-center justify-center gap-6 text-sm pt-1">
                                 <div>
                                   <div className="text-[11px] text-slate-400">Your Rank</div>
                                   <div className="text-2xl font-black gold-gradient-text">
@@ -637,7 +604,7 @@ function CandidateArena() {
                     <Sparkles className="w-10 h-10 text-amber-400 mx-auto animate-pulse" />
                     <h3 className="text-xl font-bold text-slate-100">Waiting for Question</h3>
                     <p className="text-xs sm:text-sm text-slate-400 max-w-sm mx-auto">
-                      Host Rahul is preparing the common question for Round 1. It will appear on your screen automatically!
+                      Host Rahul is preparing the Fastest Finger First sequence question. It will appear on your screen automatically!
                     </p>
                   </div>
                 )}
@@ -657,12 +624,83 @@ function CandidateArena() {
                   </h3>
                 </div>
 
+                {/* ⏱ Timer for Buzzer Round (matching Round 1) */}
+                {buzzerSession?.status === 'ACTIVE' && (
+                  <div className="flex justify-center animate-fade-in">
+                    <TimerDisplay
+                      startedAt={buzzerSession.enabledAt}
+                      timeLimitSeconds={buzzerSession.timeLimitSeconds || 30}
+                      isActive={buzzerSession.status === 'ACTIVE' && !candidateBuzzerEvent}
+                      size="lg"
+                    />
+                  </div>
+                )}
+
                 {/* Massive 3D Tactile Buzzer Component */}
                 <BuzzerButton
                   status={buzzerSession?.status || 'DISABLED'}
                   onBuzz={handlePressBuzzer}
                   buzzerEvent={candidateBuzzerEvent}
                 />
+              </div>
+            )}
+
+            {/* 🏆 GRAND CHAMPION / WINNER CELEBRATION MODAL */}
+            {winnerData && (
+              <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
+                <div className="w-full max-w-lg kbc-frame p-6 sm:p-8 text-center space-y-6 shadow-2xl relative border-amber-500/60">
+                  <div className="w-20 h-20 rounded-full bg-gradient-to-br from-amber-400 via-amber-500 to-amber-600 p-0.5 mx-auto shadow-[0_0_30px_#f59e0b] animate-bounce">
+                    <div className="w-full h-full rounded-full bg-slate-950 flex items-center justify-center text-amber-400">
+                      <Trophy className="w-10 h-10 fill-current" />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-400 text-xs font-black uppercase tracking-widest">
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>KBC Championship Final Results</span>
+                    </div>
+                    <h2 className="text-2xl sm:text-3xl font-black gold-gradient-text uppercase">
+                      {winnerData.winner?._id === candidateId ? '👑 YOU ARE THE CHAMPION! 🏆' : 'CHAMPION DECLARED!'}
+                    </h2>
+                    <p className="text-slate-300 text-sm font-medium">
+                      {winnerData.winner?._id === candidateId
+                        ? 'Congratulations! You secured 1st Place in the Vardhman KBC Championship!'
+                        : `Winner: ${winnerData.winner?.name || 'Top Candidate'}`}
+                    </p>
+                  </div>
+
+                  {/* Champion Card */}
+                  <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/10 via-amber-500/20 to-amber-500/10 border border-amber-500/40 space-y-1">
+                    <div className="text-xs text-amber-400 font-bold uppercase">1st Place Champion</div>
+                    <div className="text-xl sm:text-2xl font-black text-slate-100">{winnerData.winner?.name}</div>
+                    <div className="text-xs font-mono text-amber-400 font-bold">
+                      Total Score: {winnerData.winner?.score || 0} pts
+                    </div>
+                  </div>
+
+                  {/* Candidate's Own Final Standing */}
+                  {(() => {
+                    const myRankIdx = winnerData.standings?.findIndex((c) => c._id === candidateId);
+                    const myStanding = winnerData.standings?.[myRankIdx];
+                    if (myRankIdx === -1 || !myStanding) return null;
+                    return (
+                      <div className="p-3 rounded-xl bg-slate-900 border border-slate-700 text-xs flex items-center justify-between">
+                        <span className="text-slate-400">Your Final Standing:</span>
+                        <span className="font-black text-amber-400 text-sm">
+                          Rank #{myRankIdx + 1} ({myStanding.score || 0} pts)
+                        </span>
+                      </div>
+                    );
+                  })()}
+
+                  <button
+                    onClick={() => setWinnerData(null)}
+                    className="w-full py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 font-bold text-xs uppercase tracking-wider transition-all cursor-pointer"
+                  >
+                    Close Celebration
+                  </button>
+                </div>
               </div>
             )}
 

@@ -12,7 +12,7 @@ export default function HomePage() {
   const [candidateName, setCandidateName] = useState('');
   const [gameCode, setGameCode] = useState('KBC-2026');
   const [hostEmail, setHostEmail] = useState('rahul@admin.com');
-  const [hostPin, setHostPin] = useState('1234');
+  const [hostPin, setHostPin] = useState('');
   const [isHostLoggingIn, setIsHostLoggingIn] = useState(false);
   const [hostError, setHostError] = useState('');
 

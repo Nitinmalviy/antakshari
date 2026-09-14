@@ -10,7 +10,7 @@ import { sounds } from '@/lib/audio';
 export default function AdminPortalPage() {
   const router = useRouter();
   const [hostEmail, setHostEmail] = useState('rahul@admin.com');
-  const [hostPin, setHostPin] = useState('1234');
+  const [hostPin, setHostPin] = useState('');
   const [gameCode, setGameCode] = useState('KBC-2026');
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -132,14 +132,15 @@ export default function AdminPortalPage() {
 
                 <div>
                   <label className="block text-[11px] font-bold uppercase text-slate-400 mb-1">
-                    Security PIN (Default: 1234)
+                    Admin Password
                   </label>
                   <input
                     type="password"
                     required
+                    placeholder="Enter Admin Password"
                     value={hostPin}
                     onChange={(e) => setHostPin(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-lg bg-slate-950 border border-slate-700 text-xs font-mono text-slate-100 focus:outline-none focus:border-amber-400"
+                    className="w-full px-3.5 py-2.5 rounded-lg bg-slate-950 border border-slate-700 text-xs font-mono text-slate-100 placeholder:text-slate-600 focus:outline-none focus:border-amber-400"
                   />
                 </div>
 

@@ -19,7 +19,7 @@ async function runTest() {
   const authRes = await fetch(`${SERVER_URL}/api/auth/host`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'rahul@admin.com', pin: '1234' }),
+    body: JSON.stringify({ email: 'rahul@admin.com', pin: 'rahul@320' }),
   });
   const authData = await authRes.json();
   if (!authRes.ok || !authData.token) {
@@ -121,8 +121,8 @@ async function runTest() {
         const delay = 100 + (idx * 30) + Math.floor(Math.random() * 50);
         await sleep(delay);
 
-        // Intentionally pick B (correct) for most, and A/C/D for others
-        const chosenOption = idx % 5 === 0 ? 'A' : 'B';
+        // Intentionally pick B-D-A-C (correct sequence) for most, and A-B-C-D (incorrect) for others
+        const chosenOption = idx % 5 === 0 ? 'A-B-C-D' : 'B-D-A-C';
         c.socket.emit(SOCKET_EVENTS.ROUND1_SUBMIT_ANSWER, {
           gameId: hostGameState.game._id,
           roundId: hostGameState.currentRound._id,
@@ -148,16 +148,17 @@ async function runTest() {
       gameId: hostGameState.game._id,
       roundId: hostGameState.currentRound._id,
       questionData: {
-        questionText: 'Which city is officially known as the capital of India?',
+        questionText: 'Starting from North to South, arrange these Indian cities in correct geographical order:',
         options: [
-          { id: 'A', text: 'Mumbai' },
-          { id: 'B', text: 'New Delhi' },
-          { id: 'C', text: 'Bengaluru' },
-          { id: 'D', text: 'Chennai' },
+          { id: 'A', text: 'Bhopal' },
+          { id: 'B', text: 'Srinagar' },
+          { id: 'C', text: 'Chennai' },
+          { id: 'D', text: 'New Delhi' },
         ],
-        correctAnswerId: 'B',
+        correctAnswerId: 'B-D-A-C',
         timeLimitSeconds: 30,
-        explanation: 'New Delhi is the official capital of India.',
+        explanation: 'Srinagar (B) is furthest North, followed southwards by New Delhi (D), Bhopal (A), and Chennai (C).',
+        category: 'Fastest Finger First • Geography',
       },
     });
   });

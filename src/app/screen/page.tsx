@@ -16,10 +16,8 @@ import {
   IAnswerSubmission,
   IBuzzerEvent,
   IBuzzerSession,
-  OptionId,
 } from '@/types';
 import { sounds } from '@/lib/audio';
-import { formatOrder } from '@/lib/orderQuestion';
 import { Trophy, Zap, Users, Lock, CheckCircle2, XCircle, Sparkles } from 'lucide-react';
 
 function BigScreenArena() {
@@ -38,13 +36,13 @@ function BigScreenArena() {
   const [buzzerEvents, setBuzzerEvents] = useState<IBuzzerEvent[]>([]);
 
   const [round1Results, setRound1Results] = useState<{
-    correctAnswerId?: 'A' | 'B' | 'C' | 'D';
-    correctOrder?: OptionId[];
+    correctAnswerId?: string;
     explanation?: string;
     submissions?: IAnswerSubmission[];
   } | null>(null);
   const [isRound1Revealed, setIsRound1Revealed] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
+  const [winnerData, setWinnerData] = useState<{ winner: ICandidate; standings: ICandidate[] } | null>(null);
 
   useEffect(() => {
     if (!socket || !isConnected) return;
@@ -84,8 +82,7 @@ function BigScreenArena() {
     };
 
     const handleRound1Results = (data: {
-      correctAnswerId: 'A' | 'B' | 'C' | 'D';
-      correctOrder?: OptionId[];
+      correctAnswerId: string;
       explanation?: string;
       submissions: IAnswerSubmission[];
     }) => {
@@ -95,7 +92,7 @@ function BigScreenArena() {
       setShowConfetti(true);
     };
 
-    const handleBuzzerStarted = (data: { status: 'ACTIVE'; enabledAt: number; prompt?: string }) => {
+    const handleBuzzerStarted = (data: { status: 'ACTIVE'; enabledAt: number; prompt?: string; timeLimitSeconds?: number }) => {
       setBuzzerSession((prev) => ({
         _id: prev?._id || '',
         gameId: prev?.gameId || '',
@@ -103,6 +100,7 @@ function BigScreenArena() {
         events: [],
         status: 'ACTIVE',
         enabledAt: data.enabledAt,
+        timeLimitSeconds: data.timeLimitSeconds || 30,
         questionPrompt: data.prompt,
       }));
       setBuzzerEvents([]);
@@ -121,6 +119,12 @@ function BigScreenArena() {
     const handleBuzzerReset = () => {
       setBuzzerSession((prev) => (prev ? { ...prev, status: 'DISABLED', events: [] } : null));
       setBuzzerEvents([]);
+    };
+
+    const handleWinnerDeclared = (data: { winner: ICandidate; standings: ICandidate[] }) => {
+      setWinnerData(data);
+      setShowConfetti(true);
+      sounds.playCorrect();
     };
 
     const handleRoundSelected = (data: {
@@ -149,6 +153,8 @@ function BigScreenArena() {
     socket.on(SOCKET_EVENTS.ROUND2_RANKING_UPDATED, handleBuzzerRankingUpdate);
     socket.on(SOCKET_EVENTS.ROUND2_STOP_BUZZER, handleBuzzerStopped);
     socket.on(SOCKET_EVENTS.ROUND2_RESET_BUZZER, handleBuzzerReset);
+    socket.on(SOCKET_EVENTS.WINNER_DECLARED, handleWinnerDeclared);
+    socket.on(SOCKET_EVENTS.DECLARE_WINNER, handleWinnerDeclared);
 
     return () => {
       socket.off(SOCKET_EVENTS.GAME_STATE_UPDATE, handleStateUpdate);
@@ -160,6 +166,8 @@ function BigScreenArena() {
       socket.off(SOCKET_EVENTS.ROUND2_RANKING_UPDATED, handleBuzzerRankingUpdate);
       socket.off(SOCKET_EVENTS.ROUND2_STOP_BUZZER, handleBuzzerStopped);
       socket.off(SOCKET_EVENTS.ROUND2_RESET_BUZZER, handleBuzzerReset);
+      socket.off(SOCKET_EVENTS.WINNER_DECLARED, handleWinnerDeclared);
+      socket.off(SOCKET_EVENTS.DECLARE_WINNER, handleWinnerDeclared);
     };
   }, [socket]);
 
@@ -220,72 +228,95 @@ function BigScreenArena() {
                 {/* Grand Question Frame */}
                 <div className="kbc-frame p-8 sm:p-12 text-center relative overflow-hidden">
                   <div className="text-xs uppercase tracking-wider text-amber-400/60 font-bold mb-2">
-                    {activeQuestion.category || 'General Knowledge'}
+                    {activeQuestion.category || 'Fastest Finger First'}
                   </div>
                   <h2 className="text-2xl sm:text-4xl font-extrabold text-slate-100 leading-snug">
                     {activeQuestion.questionText}
                   </h2>
-                  {activeQuestion.questionType === 'ORDER' && (
-                    <div className="mt-4 inline-block px-4 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/40 text-amber-300 text-sm font-bold uppercase tracking-wider">
-                      Arrange in the correct order
-                    </div>
-                  )}
                 </div>
 
-                {/* Correct sequence reveal for ORDER questions */}
-                {activeQuestion.questionType === 'ORDER' && isRound1Revealed && round1Results?.correctOrder && (
-                  <div className="p-6 rounded-2xl bg-emerald-950/40 border-2 border-emerald-400 shadow-[0_0_30px_rgba(34,197,94,0.35)] space-y-4">
-                    <div className="text-center text-2xl sm:text-3xl font-black text-emerald-300 font-mono">
-                      Correct Order: {formatOrder(round1Results.correctOrder)}
+                {/* Correct Sequence Banner on Reveal */}
+                {isRound1Revealed && round1Results && (() => {
+                  const rawCorrect = round1Results.correctAnswerId || '';
+                  const correctSeq = rawCorrect.includes('-')
+                    ? rawCorrect.split('-')
+                    : rawCorrect.length === 4
+                    ? rawCorrect.split('')
+                    : [rawCorrect];
+
+                  return (
+                    <div className="p-6 rounded-2xl bg-gradient-to-r from-emerald-950/90 via-slate-900 to-emerald-950/90 border-2 border-emerald-500/60 text-center space-y-3 shadow-2xl animate-fade-in">
+                      <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 text-sm font-black uppercase tracking-widest">
+                        <CheckCircle2 className="w-5 h-5" />
+                        <span>Official Correct Sequence</span>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-center gap-3 text-lg sm:text-xl font-extrabold text-slate-100">
+                        {correctSeq.map((optId, idx) => {
+                          const opt = activeQuestion.options.find((o) => o.id === optId);
+                          return (
+                            <React.Fragment key={idx}>
+                              <div className="px-4 py-2 rounded-xl bg-emerald-500 text-slate-950 flex items-center gap-2.5 shadow-lg shadow-emerald-500/30">
+                                <span className="w-6 h-6 rounded-full bg-slate-950 text-emerald-400 text-xs flex items-center justify-center font-black">
+                                  {idx + 1}
+                                </span>
+                                <span>{optId}: {opt?.text || optId}</span>
+                              </div>
+                              {idx < correctSeq.length - 1 && (
+                                <span className="text-emerald-400 text-xl font-black">➔</span>
+                              )}
+                            </React.Fragment>
+                          );
+                        })}
+                      </div>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      {round1Results.correctOrder.map((id, position) => (
-                        <div key={id} className="flex items-center gap-4 p-3 rounded-xl bg-slate-950/60 border border-emerald-500/40">
-                          <span className="w-10 h-10 rounded-full bg-emerald-400 text-slate-950 flex items-center justify-center font-black text-lg">
-                            {position + 1}
-                          </span>
-                          <span className="text-emerald-300 font-black text-xl">{id}.</span>
-                          <span className="text-xl font-bold text-slate-100">
-                            {activeQuestion.options.find((o) => o.id === id)?.text}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                  );
+                })()}
 
                 {/* 4 Options Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                  {activeQuestion.options.map((opt) => {
-                    const isThisCorrect =
-                      isRound1Revealed && activeQuestion.questionType !== 'ORDER' && round1Results?.correctAnswerId === opt.id;
+                {(() => {
+                  const rawCorrect = round1Results?.correctAnswerId || '';
+                  const correctSeq = rawCorrect.includes('-')
+                    ? rawCorrect.split('-')
+                    : rawCorrect.length === 4
+                    ? rawCorrect.split('')
+                    : [rawCorrect];
 
-                    return (
-                      <div
-                        key={opt.id}
-                        className={`p-6 rounded-2xl border-2 flex items-center gap-5 transition-all ${
-                          isThisCorrect
-                            ? 'bg-emerald-950/70 border-emerald-400 text-emerald-200 shadow-[0_0_30px_rgba(34,197,94,0.5)] scale-102'
-                            : 'bg-slate-900/80 border-amber-500/30 text-slate-200'
-                        }`}
-                      >
-                        <div
-                          className={`w-12 h-12 rounded-xl flex items-center justify-center font-black text-lg ${
-                            isThisCorrect
-                              ? 'bg-emerald-400 text-slate-950 shadow-[0_0_15px_#22c55e]'
-                              : 'bg-slate-800 text-amber-400 border border-amber-500/40'
-                          }`}
-                        >
-                          {opt.id}
-                        </div>
-                        <span className="text-xl sm:text-2xl font-bold flex-1">{opt.text}</span>
-                        {isThisCorrect && (
-                          <CheckCircle2 className="w-8 h-8 text-emerald-400 animate-bounce" />
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
+                  return (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                      {activeQuestion.options.map((opt) => {
+                        const correctSlot = isRound1Revealed ? correctSeq.indexOf(opt.id) : -1;
+                        const isThisCorrect = isRound1Revealed && correctSlot !== -1;
+
+                        return (
+                          <div
+                            key={opt.id}
+                            className={`p-6 rounded-2xl border-2 flex items-center gap-5 transition-all ${
+                              isThisCorrect
+                                ? 'bg-emerald-950/70 border-emerald-400 text-emerald-200 shadow-[0_0_30px_rgba(34,197,94,0.5)] scale-102'
+                                : 'bg-slate-900/80 border-amber-500/30 text-slate-200'
+                            }`}
+                          >
+                            <div
+                              className={`w-12 h-12 rounded-xl flex items-center justify-center font-black text-lg ${
+                                isThisCorrect
+                                  ? 'bg-emerald-400 text-slate-950 shadow-[0_0_15px_#22c55e]'
+                                  : 'bg-slate-800 text-amber-400 border border-amber-500/40'
+                              }`}
+                            >
+                              {opt.id}
+                            </div>
+                            <span className="text-xl sm:text-2xl font-bold flex-1">{opt.text}</span>
+                            {isThisCorrect && (
+                              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500 text-slate-950 font-black text-sm uppercase">
+                                <span>Slot #{correctSlot + 1}</span>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
 
                 {/* Top Correct Speed Rankings Table on Reveal */}
                 {isRound1Revealed && round1Results && (
@@ -294,11 +325,11 @@ function BigScreenArena() {
                       <div className="flex items-center gap-2">
                         <Trophy className="w-6 h-6 text-amber-400" />
                         <h3 className="text-xl font-black gold-gradient-text uppercase">
-                          Round 1 Speed & Accuracy Results
+                          Fastest Finger First Sequence Rankings
                         </h3>
                       </div>
                       <span className="text-xs text-slate-400">
-                        Ranked by Correctness first, then fastest response time
+                        Ranked by Exact Sequence Match first, then fastest response time
                       </span>
                     </div>
 
@@ -316,17 +347,21 @@ function BigScreenArena() {
                             <span className="font-mono font-black text-base text-amber-400">
                               #{sub.rank || idx + 1}
                             </span>
-                            <span className="font-bold text-sm text-slate-200 truncate">
-                              {sub.candidateName}
-                            </span>
+                            <div>
+                              <div className="font-bold text-sm text-slate-200 truncate max-w-[140px]">
+                                {sub.candidateName}
+                              </div>
+                              <div className="text-[10px] text-amber-400/80 font-mono font-bold">
+                                {sub.selectedOptionId}
+                              </div>
+                            </div>
                           </div>
                           <div className="text-right">
                             <div className="font-mono text-xs font-bold text-amber-400">
                               {(sub.responseTimeMs / 1000).toFixed(3)}s
                             </div>
                             <div className="text-[10px]">
-                              {sub.submittedOrder && <span className="font-mono mr-1">{sub.submittedOrder.join('')}</span>}
-                              {sub.isCorrect ? '✓ Correct' : '✗ Incorrect'}
+                              {sub.isCorrect ? '✓ Correct Order' : '✗ Wrong Order'}
                             </div>
                           </div>
                         </div>
@@ -338,9 +373,9 @@ function BigScreenArena() {
             ) : (
               <div className="kbc-frame p-12 text-center space-y-3">
                 <Sparkles className="w-12 h-12 text-amber-400 mx-auto animate-pulse" />
-                <h2 className="text-2xl font-bold text-slate-100">Preparing Next Question</h2>
+                <h2 className="text-2xl font-bold text-slate-100">Preparing Fastest Finger First</h2>
                 <p className="text-sm text-slate-400">
-                  Host Rahul will launch the next common question shortly.
+                  Host Rahul will launch the sequence question shortly.
                 </p>
               </div>
             )}
@@ -359,6 +394,18 @@ function BigScreenArena() {
                 {buzzerSession?.questionPrompt || 'Listen carefully to Host Rahul!'}
               </h2>
             </div>
+
+            {/* ⏱ Live Buzzer Timer for Big Screen & Players */}
+            {buzzerSession?.status === 'ACTIVE' && (
+              <div className="flex justify-center animate-fade-in">
+                <TimerDisplay
+                  startedAt={buzzerSession.enabledAt}
+                  timeLimitSeconds={buzzerSession.timeLimitSeconds || 30}
+                  isActive={buzzerSession.status === 'ACTIVE'}
+                  size="xl"
+                />
+              </div>
+            )}
 
             {/* Live Buzzer Status Banner */}
             <div className="flex justify-center">
@@ -390,6 +437,87 @@ function BigScreenArena() {
               isHost={false}
               candidatesMap={candidatesMap}
             />
+          </div>
+        )}
+
+        {/* 🏆 GRAND CHAMPIONSHIP WINNER PODIUM OVERLAY */}
+        {winnerData && (
+          <div className="fixed inset-0 z-50 bg-black/95 backdrop-blur-xl flex items-center justify-center p-6 animate-fade-in">
+            <div className="w-full max-w-4xl kbc-frame p-8 sm:p-12 text-center space-y-8 shadow-[0_0_50px_rgba(245,158,11,0.4)] border-amber-500/80 relative">
+              <button
+                onClick={() => setWinnerData(null)}
+                className="absolute top-4 right-4 text-slate-400 hover:text-white text-lg font-bold px-3 py-1 rounded-lg bg-slate-900 border border-slate-700 cursor-pointer"
+              >
+                ✕
+              </button>
+
+              <div className="space-y-3">
+                <div className="w-28 h-28 rounded-full bg-gradient-to-br from-amber-300 via-amber-500 to-amber-700 p-1 mx-auto shadow-[0_0_50px_#f59e0b] animate-bounce">
+                  <div className="w-full h-full rounded-full bg-slate-950 flex items-center justify-center text-amber-400">
+                    <Trophy className="w-14 h-14 fill-current" />
+                  </div>
+                </div>
+
+                <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-400 text-sm font-black uppercase tracking-widest">
+                  <Sparkles className="w-4 h-4 text-amber-400" />
+                  <span>Vardhman KBC Championship Grand Finale</span>
+                </div>
+
+                <h1 className="text-4xl sm:text-6xl font-black gold-gradient-text uppercase tracking-wider">
+                  CHAMPION DECLARED!
+                </h1>
+              </div>
+
+              {/* 1st Place Podium Hero */}
+              <div className="p-8 rounded-3xl bg-gradient-to-r from-amber-500/20 via-amber-500/30 to-amber-500/20 border-2 border-amber-400 shadow-[0_0_40px_rgba(245,158,11,0.3)] space-y-2">
+                <div className="text-sm font-black text-amber-400 uppercase tracking-widest">
+                  🏆 1ST PLACE GRAND CHAMPION 🏆
+                </div>
+                <div className="text-3xl sm:text-5xl font-black text-slate-100 uppercase">
+                  {winnerData.winner?.name}
+                </div>
+                <div className="flex items-center justify-center gap-6 pt-2 font-mono text-base sm:text-lg">
+                  <span className="text-amber-300 font-black">
+                    Final Score: <strong className="text-2xl text-amber-400">{winnerData.winner?.score || 0}</strong> pts
+                  </span>
+                  {winnerData.winner?.team && (
+                    <span className="text-slate-400 font-bold">
+                      Team: {winnerData.winner?.team}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Top 3 Runners Up Podium Display */}
+              {winnerData.standings && winnerData.standings.length > 1 && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-left">
+                  {winnerData.standings.slice(0, 3).map((candidate, idx) => (
+                    <div
+                      key={candidate._id}
+                      className={`p-4 rounded-2xl border ${
+                        idx === 0
+                          ? 'bg-amber-500/20 border-amber-400'
+                          : idx === 1
+                          ? 'bg-slate-900 border-slate-700'
+                          : 'bg-amber-950/20 border-amber-800/40'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-mono font-black text-sm text-amber-400">
+                          {idx === 0 ? '🥇 1st' : idx === 1 ? '🥈 2nd' : '🥉 3rd'}
+                        </span>
+                        <span className="font-mono font-bold text-xs text-amber-300">
+                          {candidate.score || 0} pts
+                        </span>
+                      </div>
+                      <div className="font-black text-slate-100 truncate text-base">
+                        {candidate.name}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 

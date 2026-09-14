@@ -15,10 +15,11 @@ export async function POST(req: Request) {
       );
     }
 
-    // Default host pin: 1234 or Admin@123 (allows easy host access while protecting routes)
-    const validPin = pin === '1234' || pin === 'Admin@123' || !pin;
+    // Static admin password strictly enforced: rahul@320
+    const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'rahul@320';
+    const validPin = pin === ADMIN_PASSWORD;
     if (!validPin) {
-      return NextResponse.json({ error: 'Invalid Host Security PIN' }, { status: 401 });
+      return NextResponse.json({ error: 'Invalid Administrator Password' }, { status: 401 });
     }
 
     const token = jwt.sign(

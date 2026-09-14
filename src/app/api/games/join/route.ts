@@ -52,13 +52,7 @@ export async function POST(req: Request) {
       game,
       rounds,
       currentRound,
-      activeQuestion: question
-        ? {
-            ...question,
-            correctAnswerId: question.status === 'CLOSED' ? question.correctAnswerId : undefined,
-            correctOrder: question.status === 'CLOSED' ? question.correctOrder : undefined,
-          }
-        : null,
+      activeQuestion: question ? { ...question, correctAnswerId: question.status === 'CLOSED' ? question.correctAnswerId : undefined } : null,
       allCandidates,
     });
   } catch (err) {

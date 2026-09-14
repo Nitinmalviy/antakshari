@@ -3,12 +3,8 @@ export type RoundType = 'QUESTION' | 'BUZZER';
 export type RoundStatus = 'PENDING' | 'ACTIVE' | 'COMPLETED';
 export type BuzzerStatus = 'DISABLED' | 'ACTIVE' | 'CLOSED';
 
-export type OptionId = 'A' | 'B' | 'C' | 'D';
-// MCQ = pick one option, ORDER = arrange all options in the correct sequence (Fastest Finger First)
-export type QuestionType = 'MCQ' | 'ORDER';
-
 export interface IQuestionOption {
-  id: OptionId;
+  id: 'A' | 'B' | 'C' | 'D';
   text: string;
 }
 
@@ -17,10 +13,9 @@ export interface IQuestion {
   gameId: string;
   roundId: string;
   questionText: string;
-  questionType?: QuestionType;
   options: IQuestionOption[];
-  correctAnswerId: 'A' | 'B' | 'C' | 'D';
-  correctOrder?: OptionId[];
+  correctAnswerId: string; // e.g. 'A-B-C-D' or 'A'
+  correctSequence?: string[];
   timeLimitSeconds: number;
   explanation?: string;
   category?: string;
@@ -80,8 +75,8 @@ export interface IAnswerSubmission {
   questionId: string;
   candidateId: string;
   candidateName: string;
-  selectedOptionId?: OptionId;
-  submittedOrder?: OptionId[];
+  selectedOptionId: string; // e.g. 'A-B-C-D' or 'A'
+  selectedSequence?: string[];
   isCorrect: boolean;
   serverTimestamp: number;
   responseTimeMs: number;
@@ -110,6 +105,7 @@ export interface IBuzzerSession {
   status: BuzzerStatus;
   enabledAt?: number | null;
   disabledAt?: number | null;
+  timeLimitSeconds?: number;
   questionPrompt?: string;
   events: IBuzzerEvent[];
 }
@@ -168,6 +164,10 @@ export const SOCKET_EVENTS = {
   ROUND2_PRESS_BUZZER: 'round2:press_buzzer',
   ROUND2_BUZZER_RECORDED: 'round2:buzzer_recorded',
   ROUND2_RANKING_UPDATED: 'round2:ranking_updated',
+
+  // Winner & Leaderboard Celebration
+  DECLARE_WINNER: 'game:declare_winner',
+  WINNER_DECLARED: 'game:winner_declared',
 
   // Timer
   TIMER_SYNC: 'timer:sync',

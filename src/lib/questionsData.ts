@@ -1,7 +1,9 @@
 export interface PresetQuestion {
   questionText: string;
+  questionType?: 'MCQ' | 'ORDER';
   options: { id: 'A' | 'B' | 'C' | 'D'; text: string }[];
   correctAnswerId: 'A' | 'B' | 'C' | 'D';
+  correctOrder?: ('A' | 'B' | 'C' | 'D')[];
   timeLimitSeconds: number;
   category: string;
   explanation: string;
@@ -72,5 +74,21 @@ export const PRESET_QUESTIONS: PresetQuestion[] = [
     timeLimitSeconds: 30,
     category: 'Indian Geography',
     explanation: 'The Kosi river causes devastating floods and channel shifting during monsoons.',
+  },
+  {
+    // Options are listed in the correct order; the server shuffles them before players see them
+    questionText: 'Arrange these planets by distance from the Sun, starting with the nearest.',
+    questionType: 'ORDER',
+    options: [
+      { id: 'A', text: 'Mercury' },
+      { id: 'B', text: 'Venus' },
+      { id: 'C', text: 'Earth' },
+      { id: 'D', text: 'Mars' },
+    ],
+    correctAnswerId: 'A',
+    correctOrder: ['A', 'B', 'C', 'D'],
+    timeLimitSeconds: 20,
+    category: 'Fastest Finger First',
+    explanation: 'Mercury, Venus, Earth and Mars are the four inner rocky planets, in that order from the Sun.',
   },
 ];

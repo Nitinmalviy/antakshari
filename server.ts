@@ -15,9 +15,38 @@ import {
   BuzzerSession,
   BuzzerEvent,
 } from './src/lib/models';
-import { SOCKET_EVENTS, IBuzzerEvent, IAnswerSubmission, IQuestion } from './src/types';
+import { SOCKET_EVENTS, IBuzzerEvent, IAnswerSubmission, IQuestion, OptionId } from './src/types';
 import { formatServerTimestamp, formatElapsedSeconds } from './src/lib/timeUtils';
 import { PRESET_QUESTIONS } from './src/lib/questionsData';
+import { buildShuffledOrderQuestion, getItemsInCorrectOrder, isSameOrder } from './src/lib/orderQuestion';
+
+// Extra time allowed after the timer hits zero, to absorb network latency on ORDER submissions
+const ORDER_SUBMIT_GRACE_MS = 1500;
+
+// Normalizes host-sent question fields. ORDER questions arrive in the correct sequence and
+// are re-shuffled here, so the jumbled order players see is decided only on the server.
+function prepareQuestionFields(data: Partial<IQuestion>) {
+  if (data.questionType !== 'ORDER') {
+    return {
+      questionType: 'MCQ' as const,
+      options: data.options,
+      correctAnswerId: data.correctAnswerId,
+      correctOrder: [] as OptionId[],
+    };
+  }
+  const { options, correctOrder } = buildShuffledOrderQuestion(getItemsInCorrectOrder(data));
+  return { questionType: 'ORDER' as const, options, correctOrder, correctAnswerId: correctOrder[0] };
+}
+
+// Hide answers from players until the host reveals results
+function sanitizeQuestionForPlayers<T extends { status?: string; correctAnswerId?: unknown; correctOrder?: unknown }>(question: T) {
+  const isClosed = question.status === 'CLOSED';
+  return {
+    ...question,
+    correctAnswerId: isClosed ? question.correctAnswerId : undefined,
+    correctOrder: isClosed ? question.correctOrder : undefined,
+  };
+}
 
 const dev = process.env.NODE_ENV !== 'production';
 const hostname = process.env.HOSTNAME || '0.0.0.0';
@@ -241,13 +270,8 @@ app.prepare().then(async () => {
         const candidateSub = gameState.round1Submissions.find((s) => s.candidateId === candidate._id.toString()) || null;
         const candidateBuzz = gameState.buzzerEvents.find((b) => b.candidateId === candidate._id.toString()) || null;
 
-        // Sanitize question for candidate (hide correctAnswerId before reveal)
-        const sanitizedQuestion = question
-          ? {
-              ...question,
-              correctAnswerId: question.status === 'CLOSED' ? question.correctAnswerId : undefined,
-            }
-          : null;
+        // Sanitize question for candidate (hide correct answer / order before reveal)
+        const sanitizedQuestion = question ? sanitizeQuestionForPlayers(question) : null;
 
         // Send full state to joining candidate
         socket.emit(SOCKET_EVENTS.GAME_STATE_UPDATE, {
@@ -312,12 +336,7 @@ app.prepare().then(async () => {
         const candidateSub = gameState.round1Submissions.find((s) => s.candidateId === candidate._id.toString()) || null;
         const candidateBuzz = gameState.buzzerEvents.find((b) => b.candidateId === candidate._id.toString()) || null;
 
-        const sanitizedQuestion = question
-          ? {
-              ...question,
-              correctAnswerId: question.status === 'CLOSED' ? question.correctAnswerId : undefined,
-            }
-          : null;
+        const sanitizedQuestion = question ? sanitizeQuestionForPlayers(question) : null;
 
         socket.emit(SOCKET_EVENTS.GAME_STATE_UPDATE, {
           game,
@@ -457,17 +476,22 @@ app.prepare().then(async () => {
 
         const rounds = await Round.find({ gameId: game._id }).sort({ roundNumber: 1 }).lean();
 
-        io.to(`game_${gameId}`).emit(SOCKET_EVENTS.ROUND_SELECTED, {
+        const roundPayload = {
           game,
           rounds,
           currentRound: round,
-          activeQuestion: question,
           buzzerSession: {
             status: 'DISABLED',
             enabledAt: null,
             events: [],
           },
           serverTime: Date.now(),
+        };
+        // Host gets the answer key; players and screens get the sanitized question
+        io.to(`host_${gameId}`).emit(SOCKET_EVENTS.ROUND_SELECTED, { ...roundPayload, activeQuestion: question });
+        io.to(`game_${gameId}`).except(`host_${gameId}`).emit(SOCKET_EVENTS.ROUND_SELECTED, {
+          ...roundPayload,
+          activeQuestion: question ? sanitizeQuestionForPlayers(question) : null,
         });
         console.log(`[Round Selected] Game ${game.code} switched to Round ${round.roundNumber} (${round.type})`);
       } catch (err) {
@@ -529,10 +553,13 @@ app.prepare().then(async () => {
 
         let question = await Question.findOne({ gameId, roundId });
         if (questionData && questionData.questionText) {
+          const fields = prepareQuestionFields(questionData);
           if (question) {
             question.questionText = questionData.questionText;
-            question.options = questionData.options || question.options;
-            question.correctAnswerId = questionData.correctAnswerId || question.correctAnswerId;
+            question.questionType = fields.questionType;
+            question.options = fields.options || question.options;
+            question.correctAnswerId = fields.correctAnswerId || question.correctAnswerId;
+            question.correctOrder = fields.correctOrder;
             question.timeLimitSeconds = questionData.timeLimitSeconds || 30;
             question.explanation = questionData.explanation || '';
             question.category = questionData.category || 'General Knowledge';
@@ -541,8 +568,7 @@ app.prepare().then(async () => {
               gameId,
               roundId,
               questionText: questionData.questionText,
-              options: questionData.options,
-              correctAnswerId: questionData.correctAnswerId,
+              ...fields,
               timeLimitSeconds: questionData.timeLimitSeconds || 30,
               explanation: questionData.explanation || '',
               category: questionData.category || 'General Knowledge',
@@ -576,12 +602,13 @@ app.prepare().then(async () => {
         // Delete old submissions in DB for fresh attempt
         await AnswerSubmission.deleteMany({ questionId: question._id });
 
-        // Broadcast to candidates (without exposing correctAnswerId)
+        // Broadcast to candidates (without exposing correctAnswerId / correctOrder)
         const candidatePayload = {
           _id: question._id.toString(),
           gameId,
           roundId,
           questionText: question.questionText,
+          questionType: question.questionType,
           options: question.options,
           timeLimitSeconds: question.timeLimitSeconds,
           category: question.category,
@@ -591,8 +618,8 @@ app.prepare().then(async () => {
 
         // Broadcast full question to host (with correctAnswerId)
         io.to(`host_${gameId}`).emit(SOCKET_EVENTS.ROUND1_QUESTION_STARTED, question.toObject());
-        // Broadcast candidate version to the whole room
-        io.to(`game_${gameId}`).emit(SOCKET_EVENTS.ROUND1_QUESTION_STARTED, candidatePayload);
+        // Broadcast candidate version to everyone else in the room
+        io.to(`game_${gameId}`).except(`host_${gameId}`).emit(SOCKET_EVENTS.ROUND1_QUESTION_STARTED, candidatePayload);
 
         console.log(`[Round 1 Question Started] "${question.questionText.slice(0, 30)}..." in game ${game.code}`);
       } catch (err) {
@@ -607,10 +634,15 @@ app.prepare().then(async () => {
         if (!game) return;
 
         let question = await Question.findOne({ gameId, roundId });
+        const fields = questionData.options ? prepareQuestionFields(questionData) : null;
         if (question) {
           if (questionData.questionText) question.questionText = questionData.questionText;
-          if (questionData.options) question.options = questionData.options;
-          if (questionData.correctAnswerId) question.correctAnswerId = questionData.correctAnswerId;
+          if (fields) {
+            question.questionType = fields.questionType;
+            if (fields.options) question.options = fields.options;
+            if (fields.correctAnswerId) question.correctAnswerId = fields.correctAnswerId;
+            question.correctOrder = fields.correctOrder;
+          }
           if (questionData.timeLimitSeconds) question.timeLimitSeconds = questionData.timeLimitSeconds;
           if (questionData.explanation !== undefined) question.explanation = questionData.explanation;
           if (questionData.category) question.category = questionData.category;
@@ -620,8 +652,10 @@ app.prepare().then(async () => {
             gameId,
             roundId,
             questionText: questionData.questionText || PRESET_QUESTIONS[0].questionText,
-            options: questionData.options || PRESET_QUESTIONS[0].options,
-            correctAnswerId: questionData.correctAnswerId || PRESET_QUESTIONS[0].correctAnswerId,
+            questionType: fields?.questionType || 'MCQ',
+            options: fields?.options || PRESET_QUESTIONS[0].options,
+            correctAnswerId: fields?.correctAnswerId || PRESET_QUESTIONS[0].correctAnswerId,
+            correctOrder: fields?.correctOrder || [],
             timeLimitSeconds: questionData.timeLimitSeconds || 30,
             explanation: questionData.explanation || '',
             category: questionData.category || 'General Knowledge',
@@ -634,6 +668,7 @@ app.prepare().then(async () => {
           gameId,
           roundId,
           questionText: question.questionText,
+          questionType: question.questionType,
           options: question.options,
           timeLimitSeconds: question.timeLimitSeconds,
           category: question.category,
@@ -642,7 +677,7 @@ app.prepare().then(async () => {
         };
 
         io.to(`host_${gameId}`).emit(SOCKET_EVENTS.ROUND1_QUESTION_STARTED, question.toObject());
-        io.to(`game_${gameId}`).emit(SOCKET_EVENTS.ROUND1_QUESTION_STARTED, candidatePayload);
+        io.to(`game_${gameId}`).except(`host_${gameId}`).emit(SOCKET_EVENTS.ROUND1_QUESTION_STARTED, candidatePayload);
         console.log(`[Round 1 Question Live Updated] Host updated question for game ${game.code}`);
       } catch (err) {
         console.error('[Round 1 Update Question Error]', err);
@@ -652,17 +687,20 @@ app.prepare().then(async () => {
     socket.on(SOCKET_EVENTS.ROUND1_SAVE_QUESTION, async (data: { gameId: string; roundId: string; questionData: Partial<IQuestion> }) => {
       try {
         const { gameId, roundId, questionData } = data;
+        const fields = questionData.options ? prepareQuestionFields(questionData) : null;
         const newQuestion = await Question.create({
           gameId,
           roundId,
           questionText: questionData.questionText || 'New Question',
-          options: questionData.options || [
+          questionType: fields?.questionType || 'MCQ',
+          options: fields?.options || [
             { id: 'A', text: 'Option A' },
             { id: 'B', text: 'Option B' },
             { id: 'C', text: 'Option C' },
             { id: 'D', text: 'Option D' },
           ],
-          correctAnswerId: questionData.correctAnswerId || 'A',
+          correctAnswerId: fields?.correctAnswerId || 'A',
+          correctOrder: fields?.correctOrder || [],
           timeLimitSeconds: questionData.timeLimitSeconds || 30,
           category: questionData.category || 'Round 1 Common Question',
           explanation: questionData.explanation || '',
@@ -715,9 +753,9 @@ app.prepare().then(async () => {
       }
     });
 
-    socket.on(SOCKET_EVENTS.ROUND1_SUBMIT_ANSWER, async (data: { gameId: string; roundId: string; questionId: string; candidateId: string; selectedOptionId: 'A' | 'B' | 'C' | 'D' }) => {
+    socket.on(SOCKET_EVENTS.ROUND1_SUBMIT_ANSWER, async (data: { gameId: string; roundId: string; questionId: string; candidateId: string; selectedOptionId?: OptionId; submittedOrder?: OptionId[] }) => {
       try {
-        const { gameId, roundId, questionId, candidateId, selectedOptionId } = data;
+        const { gameId, roundId, questionId, candidateId } = data;
         const serverTimestamp = Date.now();
 
         const gameState = getOrCreateGameState(gameId, '');
@@ -733,13 +771,39 @@ app.prepare().then(async () => {
           return;
         }
 
+        const startedAt = gameState.questionStartedAt || question.startedAt || serverTimestamp;
+        const responseTimeMs = Math.max(1, serverTimestamp - startedAt);
+        const isOrderQuestion = question.questionType === 'ORDER';
+
+        let selectedOptionId: OptionId | undefined;
+        let submittedOrder: OptionId[] | undefined;
+        let isCorrect: boolean;
+
+        if (isOrderQuestion) {
+          if (responseTimeMs > question.timeLimitSeconds * 1000 + ORDER_SUBMIT_GRACE_MS) {
+            socket.emit(SOCKET_EVENTS.ERROR, { message: 'Time is up! Your order was not accepted.' });
+            return;
+          }
+          // Must use every option exactly once
+          const optionIds = question.options.map((o) => o.id);
+          const order = Array.isArray(data.submittedOrder) ? data.submittedOrder : [];
+          const isCompleteOrder =
+            order.length === optionIds.length && new Set(order).size === order.length && order.every((id) => optionIds.includes(id));
+          if (!isCompleteOrder) {
+            socket.emit(SOCKET_EVENTS.ERROR, { message: 'Please arrange all options before submitting.' });
+            return;
+          }
+          submittedOrder = order;
+          isCorrect = isSameOrder(order, question.correctOrder);
+        } else {
+          selectedOptionId = data.selectedOptionId;
+          isCorrect = selectedOptionId === question.correctAnswerId;
+        }
+
         // Mark as submitted synchronously in memory to prevent double submit
         gameState.submittedCandidateIds.add(candidateId);
 
         const candidateName = gameState.candidatesMap.get(candidateId)?.name || 'Candidate';
-        const startedAt = gameState.questionStartedAt || question.startedAt || serverTimestamp;
-        const responseTimeMs = Math.max(1, serverTimestamp - startedAt);
-        const isCorrect = selectedOptionId === question.correctAnswerId;
 
         const submissionRecord: IAnswerSubmission = {
           gameId,
@@ -748,6 +812,7 @@ app.prepare().then(async () => {
           candidateId,
           candidateName,
           selectedOptionId,
+          submittedOrder,
           isCorrect,
           serverTimestamp,
           responseTimeMs,
@@ -764,6 +829,7 @@ app.prepare().then(async () => {
           candidateId,
           candidateName,
           selectedOptionId,
+          submittedOrder,
           isCorrect,
           serverTimestamp,
           responseTimeMs,
@@ -773,6 +839,7 @@ app.prepare().then(async () => {
         socket.emit(SOCKET_EVENTS.ROUND1_ANSWER_RECORDED, {
           candidateId,
           selectedOptionId,
+          submittedOrder,
           responseTimeMs,
           serverTimestamp,
         });
@@ -784,7 +851,7 @@ app.prepare().then(async () => {
           isRevealed: false,
         });
 
-        console.log(`[Round 1 Answer] ${candidateName} selected ${selectedOptionId} in ${(responseTimeMs / 1000).toFixed(3)}s (Correct: ${isCorrect})`);
+        console.log(`[Round 1 Answer] ${candidateName} submitted ${submittedOrder ? submittedOrder.join('') : selectedOptionId} in ${(responseTimeMs / 1000).toFixed(3)}s (Correct: ${isCorrect})`);
       } catch (err) {
         console.error('[Submit Answer Error]', err);
       }
@@ -837,7 +904,9 @@ app.prepare().then(async () => {
         // Broadcast results with correct answer revealed
         io.to(`game_${gameId}`).emit(SOCKET_EVENTS.ROUND1_RESULTS_UPDATED, {
           questionId,
+          questionType: question.questionType,
           correctAnswerId: question.correctAnswerId,
+          correctOrder: question.correctOrder,
           explanation: question.explanation,
           submissions: sortedSubmissions,
           totalSubmissions: sortedSubmissions.length,

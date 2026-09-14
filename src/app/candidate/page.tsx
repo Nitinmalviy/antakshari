@@ -1,10 +1,11 @@
 'use client';
 
-import React, { useState, useEffect, Suspense } from 'react';
+import React, { useState, useEffect, useCallback, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useSocket } from '@/lib/useSocket';
 import { Header } from '@/components/Header';
 import { QuestionCard } from '@/components/QuestionCard';
+import { OrderQuestionCard } from '@/components/OrderQuestionCard';
 import { BuzzerButton } from '@/components/BuzzerButton';
 import { TimerDisplay } from '@/components/TimerDisplay';
 import { ConfettiCelebration } from '@/components/ConfettiCelebration';
@@ -17,6 +18,7 @@ import {
   IAnswerSubmission,
   IBuzzerEvent,
   IBuzzerSession,
+  OptionId,
 } from '@/types';
 import { sounds } from '@/lib/audio';
 import { Users, AlertTriangle, Trophy, Sparkles, CheckCircle2, Wifi, Loader2, ArrowRight } from 'lucide-react';
@@ -45,10 +47,13 @@ function CandidateArena() {
 
   // Candidate personal state
   const [selectedOption, setSelectedOption] = useState<'A' | 'B' | 'C' | 'D' | null>(null);
+  const [arrangedOrder, setArrangedOrder] = useState<OptionId[]>([]);
+  const [isTimeUp, setIsTimeUp] = useState(false);
   const [isAnswerSubmitted, setIsAnswerSubmitted] = useState(false);
   const [isRound1Revealed, setIsRound1Revealed] = useState(false);
   const [round1Results, setRound1Results] = useState<{
     correctAnswerId?: 'A' | 'B' | 'C' | 'D';
+    correctOrder?: OptionId[];
     explanation?: string;
     submissions?: IAnswerSubmission[];
   } | null>(null);
@@ -180,10 +185,12 @@ function CandidateArena() {
       }
 
       if (data.candidateSubmission) {
-        setSelectedOption(data.candidateSubmission.selectedOptionId);
+        setSelectedOption(data.candidateSubmission.selectedOptionId || null);
+        setArrangedOrder(data.candidateSubmission.submittedOrder || []);
         setIsAnswerSubmitted(true);
       } else {
         setSelectedOption(null);
+        setArrangedOrder([]);
         setIsAnswerSubmitted(false);
       }
 
@@ -206,14 +213,17 @@ function CandidateArena() {
     const handleQuestionStarted = (question: IQuestion) => {
       setActiveQuestion(question);
       setSelectedOption(null);
+      setArrangedOrder([]);
+      setIsTimeUp(false);
       setIsAnswerSubmitted(false);
       setIsRound1Revealed(false);
       setRound1Results(null);
       sounds.playLock();
     };
 
-    const handleAnswerRecorded = (data: { selectedOptionId: 'A' | 'B' | 'C' | 'D'; responseTimeMs: number }) => {
-      setSelectedOption(data.selectedOptionId);
+    const handleAnswerRecorded = (data: { selectedOptionId?: OptionId; submittedOrder?: OptionId[]; responseTimeMs: number }) => {
+      setSelectedOption(data.selectedOptionId || null);
+      if (data.submittedOrder) setArrangedOrder(data.submittedOrder);
       setIsAnswerSubmitted(true);
       sounds.playLock();
     };
@@ -221,6 +231,7 @@ function CandidateArena() {
     const handleRound1Results = (data: {
       questionId: string;
       correctAnswerId: 'A' | 'B' | 'C' | 'D';
+      correctOrder?: OptionId[];
       explanation?: string;
       submissions: IAnswerSubmission[];
     }) => {
@@ -278,6 +289,8 @@ function CandidateArena() {
       setActiveQuestion(data.activeQuestion);
       setBuzzerSession(data.buzzerSession);
       setSelectedOption(null);
+      setArrangedOrder([]);
+      setIsTimeUp(false);
       setIsAnswerSubmitted(false);
       setIsRound1Revealed(false);
       setRound1Results(null);
@@ -335,6 +348,28 @@ function CandidateArena() {
       selectedOptionId: selectedOption,
     });
   };
+
+  // Round 1 (ORDER question): lock the arranged sequence
+  const handleSubmitOrder = () => {
+    if (!game || !currentRound || !activeQuestion || isAnswerSubmitted || isTimeUp || !candidateId) return;
+    if (arrangedOrder.length !== activeQuestion.options.length) return;
+
+    setIsAnswerSubmitted(true);
+    emit(SOCKET_EVENTS.ROUND1_SUBMIT_ANSWER, {
+      gameId: game._id,
+      roundId: currentRound._id,
+      questionId: activeQuestion._id,
+      candidateId,
+      submittedOrder: arrangedOrder,
+    });
+  };
+
+  const handleTimerExpire = useCallback(() => setIsTimeUp(true), []);
+
+  // Reset the time-up lock whenever a question is (re)started
+  useEffect(() => {
+    setIsTimeUp(false);
+  }, [activeQuestion?._id, activeQuestion?.startedAt]);
 
   // Round 2+: Press Buzzer
   const handlePressBuzzer = () => {
@@ -521,22 +556,36 @@ function CandidateArena() {
                           startedAt={activeQuestion.startedAt}
                           timeLimitSeconds={activeQuestion.timeLimitSeconds}
                           isActive={activeQuestion.status === 'ACTIVE' && !isAnswerSubmitted}
+                          onExpire={handleTimerExpire}
                           size="lg"
                         />
                       </div>
                     )}
 
                     {/* Question Card */}
-                    <QuestionCard
-                      question={activeQuestion}
-                      selectedOption={selectedOption}
-                      onSelectOption={handleSelectOption}
-                      onSubmitAnswer={handleSubmitAnswer}
-                      showSubmitButton={true}
-                      isSubmitted={isAnswerSubmitted}
-                      isRevealed={isRound1Revealed}
-                      correctAnswerId={round1Results?.correctAnswerId}
-                    />
+                    {activeQuestion.questionType === 'ORDER' ? (
+                      <OrderQuestionCard
+                        question={activeQuestion}
+                        arrangedOrder={arrangedOrder}
+                        onChangeOrder={setArrangedOrder}
+                        onSubmitOrder={handleSubmitOrder}
+                        isSubmitted={isAnswerSubmitted}
+                        isRevealed={isRound1Revealed}
+                        isTimeUp={isTimeUp || activeQuestion.status === 'CLOSED'}
+                        correctOrder={round1Results?.correctOrder}
+                      />
+                    ) : (
+                      <QuestionCard
+                        question={activeQuestion}
+                        selectedOption={selectedOption}
+                        onSelectOption={handleSelectOption}
+                        onSubmitAnswer={handleSubmitAnswer}
+                        showSubmitButton={true}
+                        isSubmitted={isAnswerSubmitted}
+                        isRevealed={isRound1Revealed}
+                        correctAnswerId={round1Results?.correctAnswerId}
+                      />
+                    )}
 
                     {/* Personal Rank on Reveal */}
                     {isRound1Revealed && round1Results && (
@@ -556,10 +605,10 @@ function CandidateArena() {
                               <div className="text-xl font-bold flex items-center justify-center gap-2">
                                 {mySub.isCorrect ? (
                                   <span className="text-emerald-400 flex items-center gap-1.5">
-                                    <CheckCircle2 className="w-5 h-5" /> CORRECT ANSWER!
+                                    <CheckCircle2 className="w-5 h-5" /> {mySub.submittedOrder ? 'CORRECT ORDER!' : 'CORRECT ANSWER!'}
                                   </span>
                                 ) : (
-                                  <span className="text-rose-400">INCORRECT ANSWER</span>
+                                  <span className="text-rose-400">{mySub.submittedOrder ? 'WRONG ORDER' : 'INCORRECT ANSWER'}</span>
                                 )}
                               </div>
                               <div className="flex items-center justify-center gap-6 text-sm">

@@ -64,8 +64,10 @@ export interface IQuestionDoc extends Document {
   gameId: mongoose.Types.ObjectId;
   roundId: mongoose.Types.ObjectId;
   questionText: string;
+  questionType: 'MCQ' | 'ORDER';
   options: { id: 'A' | 'B' | 'C' | 'D'; text: string }[];
   correctAnswerId: 'A' | 'B' | 'C' | 'D';
+  correctOrder: ('A' | 'B' | 'C' | 'D')[];
   timeLimitSeconds: number;
   explanation?: string;
   category?: string;
@@ -79,6 +81,7 @@ const QuestionSchema = new Schema<IQuestionDoc>(
     gameId: { type: Schema.Types.ObjectId, ref: 'Game', required: true, index: true },
     roundId: { type: Schema.Types.ObjectId, ref: 'Round', required: true, index: true },
     questionText: { type: String, required: true },
+    questionType: { type: String, enum: ['MCQ', 'ORDER'], default: 'MCQ' },
     options: [
       {
         id: { type: String, enum: ['A', 'B', 'C', 'D'], required: true },
@@ -86,6 +89,7 @@ const QuestionSchema = new Schema<IQuestionDoc>(
       },
     ],
     correctAnswerId: { type: String, enum: ['A', 'B', 'C', 'D'], required: true },
+    correctOrder: { type: [{ type: String, enum: ['A', 'B', 'C', 'D'] }], default: [] },
     timeLimitSeconds: { type: Number, default: 30 },
     explanation: { type: String, default: '' },
     category: { type: String, default: 'General Knowledge' },
@@ -138,7 +142,8 @@ export interface IAnswerSubmissionDoc extends Document {
   questionId: mongoose.Types.ObjectId;
   candidateId: mongoose.Types.ObjectId;
   candidateName: string;
-  selectedOptionId: 'A' | 'B' | 'C' | 'D';
+  selectedOptionId?: 'A' | 'B' | 'C' | 'D';
+  submittedOrder?: ('A' | 'B' | 'C' | 'D')[];
   isCorrect: boolean;
   serverTimestamp: number;
   responseTimeMs: number;
@@ -152,7 +157,8 @@ const AnswerSubmissionSchema = new Schema<IAnswerSubmissionDoc>(
     questionId: { type: Schema.Types.ObjectId, ref: 'Question', required: true },
     candidateId: { type: Schema.Types.ObjectId, ref: 'Candidate', required: true },
     candidateName: { type: String, required: true },
-    selectedOptionId: { type: String, enum: ['A', 'B', 'C', 'D'], required: true },
+    selectedOptionId: { type: String, enum: ['A', 'B', 'C', 'D'] },
+    submittedOrder: { type: [{ type: String, enum: ['A', 'B', 'C', 'D'] }], default: undefined },
     isCorrect: { type: Boolean, required: true },
     serverTimestamp: { type: Number, required: true },
     responseTimeMs: { type: Number, required: true },

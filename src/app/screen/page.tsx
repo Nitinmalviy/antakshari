@@ -16,8 +16,10 @@ import {
   IAnswerSubmission,
   IBuzzerEvent,
   IBuzzerSession,
+  OptionId,
 } from '@/types';
 import { sounds } from '@/lib/audio';
+import { formatOrder } from '@/lib/orderQuestion';
 import { Trophy, Zap, Users, Lock, CheckCircle2, XCircle, Sparkles } from 'lucide-react';
 
 function BigScreenArena() {
@@ -37,6 +39,7 @@ function BigScreenArena() {
 
   const [round1Results, setRound1Results] = useState<{
     correctAnswerId?: 'A' | 'B' | 'C' | 'D';
+    correctOrder?: OptionId[];
     explanation?: string;
     submissions?: IAnswerSubmission[];
   } | null>(null);
@@ -82,6 +85,7 @@ function BigScreenArena() {
 
     const handleRound1Results = (data: {
       correctAnswerId: 'A' | 'B' | 'C' | 'D';
+      correctOrder?: OptionId[];
       explanation?: string;
       submissions: IAnswerSubmission[];
     }) => {
@@ -221,12 +225,40 @@ function BigScreenArena() {
                   <h2 className="text-2xl sm:text-4xl font-extrabold text-slate-100 leading-snug">
                     {activeQuestion.questionText}
                   </h2>
+                  {activeQuestion.questionType === 'ORDER' && (
+                    <div className="mt-4 inline-block px-4 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/40 text-amber-300 text-sm font-bold uppercase tracking-wider">
+                      Arrange in the correct order
+                    </div>
+                  )}
                 </div>
+
+                {/* Correct sequence reveal for ORDER questions */}
+                {activeQuestion.questionType === 'ORDER' && isRound1Revealed && round1Results?.correctOrder && (
+                  <div className="p-6 rounded-2xl bg-emerald-950/40 border-2 border-emerald-400 shadow-[0_0_30px_rgba(34,197,94,0.35)] space-y-4">
+                    <div className="text-center text-2xl sm:text-3xl font-black text-emerald-300 font-mono">
+                      Correct Order: {formatOrder(round1Results.correctOrder)}
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {round1Results.correctOrder.map((id, position) => (
+                        <div key={id} className="flex items-center gap-4 p-3 rounded-xl bg-slate-950/60 border border-emerald-500/40">
+                          <span className="w-10 h-10 rounded-full bg-emerald-400 text-slate-950 flex items-center justify-center font-black text-lg">
+                            {position + 1}
+                          </span>
+                          <span className="text-emerald-300 font-black text-xl">{id}.</span>
+                          <span className="text-xl font-bold text-slate-100">
+                            {activeQuestion.options.find((o) => o.id === id)?.text}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* 4 Options Grid */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                   {activeQuestion.options.map((opt) => {
-                    const isThisCorrect = isRound1Revealed && round1Results?.correctAnswerId === opt.id;
+                    const isThisCorrect =
+                      isRound1Revealed && activeQuestion.questionType !== 'ORDER' && round1Results?.correctAnswerId === opt.id;
 
                     return (
                       <div
@@ -293,6 +325,7 @@ function BigScreenArena() {
                               {(sub.responseTimeMs / 1000).toFixed(3)}s
                             </div>
                             <div className="text-[10px]">
+                              {sub.submittedOrder && <span className="font-mono mr-1">{sub.submittedOrder.join('')}</span>}
                               {sub.isCorrect ? '✓ Correct' : '✗ Incorrect'}
                             </div>
                           </div>

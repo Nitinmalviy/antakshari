@@ -3,8 +3,12 @@ export type RoundType = 'QUESTION' | 'BUZZER';
 export type RoundStatus = 'PENDING' | 'ACTIVE' | 'COMPLETED';
 export type BuzzerStatus = 'DISABLED' | 'ACTIVE' | 'CLOSED';
 
+export type OptionId = 'A' | 'B' | 'C' | 'D';
+// MCQ = pick one option, ORDER = arrange all options in the correct sequence (Fastest Finger First)
+export type QuestionType = 'MCQ' | 'ORDER';
+
 export interface IQuestionOption {
-  id: 'A' | 'B' | 'C' | 'D';
+  id: OptionId;
   text: string;
 }
 
@@ -13,8 +17,10 @@ export interface IQuestion {
   gameId: string;
   roundId: string;
   questionText: string;
+  questionType?: QuestionType;
   options: IQuestionOption[];
   correctAnswerId: 'A' | 'B' | 'C' | 'D';
+  correctOrder?: OptionId[];
   timeLimitSeconds: number;
   explanation?: string;
   category?: string;
@@ -74,7 +80,8 @@ export interface IAnswerSubmission {
   questionId: string;
   candidateId: string;
   candidateName: string;
-  selectedOptionId: 'A' | 'B' | 'C' | 'D';
+  selectedOptionId?: OptionId;
+  submittedOrder?: OptionId[];
   isCorrect: boolean;
   serverTimestamp: number;
   responseTimeMs: number;

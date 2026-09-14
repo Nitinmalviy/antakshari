@@ -16,8 +16,11 @@ import {
   IAnswerSubmission,
   IBuzzerEvent,
   IBuzzerSession,
+  OptionId,
+  QuestionType,
 } from '@/types';
 import { PRESET_QUESTIONS, PresetQuestion } from '@/lib/questionsData';
+import { OPTION_IDS, getItemsInCorrectOrder, formatOrder } from '@/lib/orderQuestion';
 import { sounds } from '@/lib/audio';
 import {
   Shield,
@@ -49,6 +52,7 @@ import {
   Edit3,
   Flame,
   UserCheck,
+  ListOrdered,
 } from 'lucide-react';
 
 // Helper to format timestamps gracefully
@@ -261,6 +265,9 @@ function HostDashboard() {
   const [optionC, setOptionC] = useState(PRESET_QUESTIONS[0].options[2].text);
   const [optionD, setOptionD] = useState(PRESET_QUESTIONS[0].options[3].text);
   const [correctAnswer, setCorrectAnswer] = useState<'A' | 'B' | 'C' | 'D'>(PRESET_QUESTIONS[0].correctAnswerId);
+  const [questionType, setQuestionType] = useState<QuestionType>('MCQ');
+  // ORDER questions: items typed in the CORRECT sequence (server shuffles them for players)
+  const [orderItems, setOrderItems] = useState<string[]>(['', '', '', '']);
   const [timeLimit, setTimeLimit] = useState(30);
   const [explanation, setExplanation] = useState(PRESET_QUESTIONS[0].explanation);
   const [category, setCategory] = useState('General Knowledge');
@@ -561,6 +568,59 @@ function HostDashboard() {
     });
   }, [socket, isConnected, isAuthVerified, gameCode, emit]);
 
+  // Load any question (live, saved or preset) into the composer
+  const fillEditorFromQuestion = (q: {
+    questionText: string;
+    questionType?: QuestionType;
+    options: { id: OptionId; text: string }[];
+    correctAnswerId: OptionId;
+    correctOrder?: OptionId[];
+    timeLimitSeconds: number;
+    explanation?: string;
+  }) => {
+    setQuestionText(q.questionText);
+    setQuestionType(q.questionType === 'ORDER' ? 'ORDER' : 'MCQ');
+    setOptionA(q.options[0]?.text || '');
+    setOptionB(q.options[1]?.text || '');
+    setOptionC(q.options[2]?.text || '');
+    setOptionD(q.options[3]?.text || '');
+    setCorrectAnswer(q.correctAnswerId);
+    if (q.questionType === 'ORDER') setOrderItems(getItemsInCorrectOrder(q));
+    setTimeLimit(q.timeLimitSeconds);
+    setExplanation(q.explanation || '');
+  };
+
+  const buildQuestionData = (): Partial<IQuestion> => {
+    const base = { questionText, questionType, timeLimitSeconds: timeLimit, explanation, category };
+    if (questionType === 'ORDER') {
+      return {
+        ...base,
+        options: orderItems.map((text, i) => ({ id: OPTION_IDS[i], text: text.trim() })),
+        correctAnswerId: 'A',
+        correctOrder: OPTION_IDS.slice(0, orderItems.length),
+      };
+    }
+    return {
+      ...base,
+      options: [
+        { id: 'A', text: optionA },
+        { id: 'B', text: optionB },
+        { id: 'C', text: optionC },
+        { id: 'D', text: optionD },
+      ],
+      correctAnswerId: correctAnswer,
+    };
+  };
+
+  const isQuestionDataValid = () => {
+    if (questionType === 'ORDER' && orderItems.some((item) => !item.trim())) {
+      notify('Fill all 4 items in the correct order before continuing.');
+      sounds.playWrong();
+      return false;
+    }
+    return true;
+  };
+
   // Socket Events
   useEffect(() => {
     if (!socket) return;
@@ -583,14 +643,7 @@ function HostDashboard() {
 
       if (data.activeQuestion) {
         setActiveQuestion(data.activeQuestion);
-        setQuestionText(data.activeQuestion.questionText);
-        setOptionA(data.activeQuestion.options[0]?.text || '');
-        setOptionB(data.activeQuestion.options[1]?.text || '');
-        setOptionC(data.activeQuestion.options[2]?.text || '');
-        setOptionD(data.activeQuestion.options[3]?.text || '');
-        setCorrectAnswer(data.activeQuestion.correctAnswerId);
-        setTimeLimit(data.activeQuestion.timeLimitSeconds);
-        setExplanation(data.activeQuestion.explanation || '');
+        fillEditorFromQuestion(data.activeQuestion);
       }
 
       if (data.buzzerSession) {
@@ -631,14 +684,7 @@ function HostDashboard() {
       }
       if (data.activeQuestion) {
         setActiveQuestion(data.activeQuestion);
-        setQuestionText(data.activeQuestion.questionText);
-        setOptionA(data.activeQuestion.options[0]?.text || '');
-        setOptionB(data.activeQuestion.options[1]?.text || '');
-        setOptionC(data.activeQuestion.options[2]?.text || '');
-        setOptionD(data.activeQuestion.options[3]?.text || '');
-        setCorrectAnswer(data.activeQuestion.correctAnswerId);
-        setTimeLimit(data.activeQuestion.timeLimitSeconds);
-        setExplanation(data.activeQuestion.explanation || '');
+        fillEditorFromQuestion(data.activeQuestion);
       }
       if (data.buzzerSession) {
         setBuzzerSession(data.buzzerSession);
@@ -649,6 +695,11 @@ function HostDashboard() {
 
     const handleQuestionsList = (questions: IQuestion[]) => {
       setSavedQuestions(questions || []);
+    };
+
+    // Full question (with answer key and the shuffled letters players see)
+    const handleQuestionStarted = (question: IQuestion) => {
+      setActiveQuestion(question);
     };
 
     const handleRound1Results = (data: {
@@ -701,6 +752,7 @@ function HostDashboard() {
     socket.on(SOCKET_EVENTS.ROUNDS_UPDATED, handleRoundsUpdated);
     socket.on(SOCKET_EVENTS.ROUND_SELECTED, handleRoundSelected);
     socket.on(SOCKET_EVENTS.ROUND1_QUESTIONS_LIST, handleQuestionsList);
+    socket.on(SOCKET_EVENTS.ROUND1_QUESTION_STARTED, handleQuestionStarted);
     socket.on(SOCKET_EVENTS.ROUND1_RESULTS_UPDATED, handleRound1Results);
     socket.on(SOCKET_EVENTS.ROUND2_RANKING_UPDATED, handleBuzzerRankingUpdate);
     socket.on(SOCKET_EVENTS.ROUND2_START_BUZZER, handleBuzzerStarted);
@@ -713,6 +765,7 @@ function HostDashboard() {
       socket.off(SOCKET_EVENTS.ROUNDS_UPDATED, handleRoundsUpdated);
       socket.off(SOCKET_EVENTS.ROUND_SELECTED, handleRoundSelected);
       socket.off(SOCKET_EVENTS.ROUND1_QUESTIONS_LIST, handleQuestionsList);
+      socket.off(SOCKET_EVENTS.ROUND1_QUESTION_STARTED, handleQuestionStarted);
       socket.off(SOCKET_EVENTS.ROUND1_RESULTS_UPDATED, handleRound1Results);
       socket.off(SOCKET_EVENTS.ROUND2_RANKING_UPDATED, handleBuzzerRankingUpdate);
       socket.off(SOCKET_EVENTS.ROUND2_START_BUZZER, handleBuzzerStarted);
@@ -809,14 +862,7 @@ function HostDashboard() {
 
   // Load Preset Question into Round 1 Editor & Broadcast to Candidates
   const handleLoadPreset = (preset: PresetQuestion) => {
-    setQuestionText(preset.questionText);
-    setOptionA(preset.options[0].text);
-    setOptionB(preset.options[1].text);
-    setOptionC(preset.options[2].text);
-    setOptionD(preset.options[3].text);
-    setCorrectAnswer(preset.correctAnswerId);
-    setTimeLimit(preset.timeLimitSeconds);
-    setExplanation(preset.explanation);
+    fillEditorFromQuestion(preset);
     setCategory(preset.category);
     sounds.playLock();
 
@@ -826,8 +872,10 @@ function HostDashboard() {
         roundId: currentRound._id,
         questionData: {
           questionText: preset.questionText,
+          questionType: preset.questionType || 'MCQ',
           options: preset.options,
           correctAnswerId: preset.correctAnswerId,
+          correctOrder: preset.correctOrder,
           timeLimitSeconds: preset.timeLimitSeconds,
           explanation: preset.explanation,
           category: preset.category,
@@ -840,14 +888,7 @@ function HostDashboard() {
 
   // Load Question from Saved MongoDB Bank
   const handleLoadSavedQuestion = (q: IQuestion) => {
-    setQuestionText(q.questionText);
-    setOptionA(q.options[0]?.text || '');
-    setOptionB(q.options[1]?.text || '');
-    setOptionC(q.options[2]?.text || '');
-    setOptionD(q.options[3]?.text || '');
-    setCorrectAnswer(q.correctAnswerId);
-    setTimeLimit(q.timeLimitSeconds);
-    setExplanation(q.explanation || '');
+    fillEditorFromQuestion(q);
     setCategory(q.category || 'Round 1 Question');
     sounds.playLock();
 
@@ -857,8 +898,10 @@ function HostDashboard() {
         roundId: currentRound._id,
         questionData: {
           questionText: q.questionText,
+          questionType: q.questionType || 'MCQ',
           options: q.options,
           correctAnswerId: q.correctAnswerId,
+          correctOrder: q.correctOrder,
           timeLimitSeconds: q.timeLimitSeconds,
           explanation: q.explanation,
           category: q.category,
@@ -871,21 +914,9 @@ function HostDashboard() {
 
   // Save Current Question to MongoDB Bank for Round 1
   const handleSaveQuestionToBank = () => {
-    if (!game || !currentRound) return;
+    if (!game || !currentRound || !isQuestionDataValid()) return;
 
-    const questionData: Partial<IQuestion> = {
-      questionText,
-      options: [
-        { id: 'A', text: optionA },
-        { id: 'B', text: optionB },
-        { id: 'C', text: optionC },
-        { id: 'D', text: optionD },
-      ],
-      correctAnswerId: correctAnswer,
-      timeLimitSeconds: timeLimit,
-      explanation,
-      category,
-    };
+    const questionData = buildQuestionData();
 
     emit(SOCKET_EVENTS.ROUND1_SAVE_QUESTION, {
       gameId: game._id,
@@ -898,21 +929,9 @@ function HostDashboard() {
 
   // Push / Update Question to Candidates in Real-Time
   const handleUpdateQuestion = () => {
-    if (!game || !currentRound) return;
+    if (!game || !currentRound || !isQuestionDataValid()) return;
 
-    const questionData: Partial<IQuestion> = {
-      questionText,
-      options: [
-        { id: 'A', text: optionA },
-        { id: 'B', text: optionB },
-        { id: 'C', text: optionC },
-        { id: 'D', text: optionD },
-      ],
-      correctAnswerId: correctAnswer,
-      timeLimitSeconds: timeLimit,
-      explanation,
-      category,
-    };
+    const questionData = buildQuestionData();
 
     emit(SOCKET_EVENTS.ROUND1_UPDATE_QUESTION, {
       gameId: game._id,
@@ -925,21 +944,9 @@ function HostDashboard() {
 
   // Round 1 Controls
   const handleStartQuestion = () => {
-    if (!game || !currentRound) return;
+    if (!game || !currentRound || !isQuestionDataValid()) return;
 
-    const questionData: Partial<IQuestion> = {
-      questionText,
-      options: [
-        { id: 'A', text: optionA },
-        { id: 'B', text: optionB },
-        { id: 'C', text: optionC },
-        { id: 'D', text: optionD },
-      ],
-      correctAnswerId: correctAnswer,
-      timeLimitSeconds: timeLimit,
-      explanation,
-      category,
-    };
+    const questionData = buildQuestionData();
 
     setIsRound1Revealed(false);
     setRound1Submissions([]);
@@ -1739,7 +1746,10 @@ function HostDashboard() {
                                   {sq.questionText}
                                 </span>
                                 <span className="text-[10px] text-slate-400">
-                                  {sq.category || 'General'} • Correct: ({sq.correctAnswerId})
+                                  {sq.category || 'General'} •{' '}
+                                  {sq.questionType === 'ORDER'
+                                    ? `Arrange: ${getItemsInCorrectOrder(sq).join(' → ')}`
+                                    : `Correct: (${sq.correctAnswerId})`}
                                 </span>
                               </div>
                               <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-emerald-400 flex-shrink-0" />
@@ -1766,7 +1776,8 @@ function HostDashboard() {
                                 {preset.questionText}
                               </span>
                               <span className="text-[10px] text-slate-400">
-                                {preset.category} • Correct: ({preset.correctAnswerId})
+                                {preset.category} •{' '}
+                                {preset.questionType === 'ORDER' ? 'Arrange in Order' : `Correct: (${preset.correctAnswerId})`}
                               </span>
                             </div>
                             <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-amber-400 flex-shrink-0" />
@@ -1787,6 +1798,36 @@ function HostDashboard() {
                       </span>
                     </div>
 
+                    {/* Question Type */}
+                    <div>
+                      <label className="block text-xs font-bold uppercase text-slate-300 mb-1.5">
+                        Question Type
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {([
+                          { type: 'MCQ', label: 'Multiple Choice', hint: 'Pick 1 correct option' },
+                          { type: 'ORDER', label: 'Arrange in Order', hint: 'Fastest Finger First' },
+                        ] as const).map((t) => (
+                          <button
+                            key={t.type}
+                            type="button"
+                            onClick={() => setQuestionType(t.type)}
+                            className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                              questionType === t.type
+                                ? 'bg-amber-500/20 border-amber-400 text-amber-200 shadow-[0_0_12px_rgba(245,158,11,0.25)]'
+                                : 'bg-slate-950/70 border-slate-700 text-slate-400 hover:border-slate-500'
+                            }`}
+                          >
+                            <div className="text-xs font-black uppercase flex items-center gap-1.5">
+                              {t.type === 'ORDER' ? <ListOrdered className="w-4 h-4" /> : <HelpCircle className="w-4 h-4" />}
+                              <span>{t.label}</span>
+                            </div>
+                            <div className="text-[10px] mt-0.5 opacity-80">{t.hint}</div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
                     <div>
                       <label className="block text-xs font-bold uppercase text-slate-300 mb-1">
                         Question Text
@@ -1800,7 +1841,37 @@ function HostDashboard() {
                       />
                     </div>
 
+                    {/* ORDER: items in the correct sequence */}
+                    {questionType === 'ORDER' && (
+                      <div className="space-y-2">
+                        <div className="p-3 rounded-xl bg-amber-950/30 border border-amber-500/25 text-[11px] text-amber-200/90">
+                          Type the 4 items in the <strong>CORRECT order</strong> (1st → 4th). Players will see them
+                          shuffled as A, B, C, D and must tap them in the right sequence before the timer ends.
+                          Fastest correct order ranks #1.
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          {orderItems.map((item, i) => (
+                            <div key={i}>
+                              <label className="block text-xs font-bold text-slate-400 mb-1">
+                                {['1st', '2nd', '3rd', '4th'][i]} (position {i + 1})
+                              </label>
+                              <input
+                                type="text"
+                                value={item}
+                                onChange={(e) =>
+                                  setOrderItems((prev) => prev.map((v, idx) => (idx === i ? e.target.value : v)))
+                                }
+                                placeholder={`Item that comes ${['first', 'second', 'third', 'fourth'][i]}`}
+                                className="w-full px-3.5 py-2 rounded-lg bg-slate-950/80 border border-slate-700 text-sm text-slate-100 focus:outline-none focus:border-amber-400"
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     {/* 4 Options */}
+                    {questionType === 'MCQ' && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {(['A', 'B', 'C', 'D'] as const).map((opt) => {
                         const val = opt === 'A' ? optionA : opt === 'B' ? optionB : opt === 'C' ? optionC : optionD;
@@ -1834,6 +1905,23 @@ function HostDashboard() {
                         );
                       })}
                     </div>
+                    )}
+
+                    {/* Live shuffle on players' screens + answer key */}
+                    {activeQuestion?.questionType === 'ORDER' && activeQuestion.correctOrder && (
+                      <div className="p-3 rounded-xl bg-slate-950/80 border border-emerald-500/30 text-xs space-y-1.5">
+                        <div className="font-bold uppercase text-emerald-400">
+                          Live on players&apos; screens • Answer key: {formatOrder(activeQuestion.correctOrder)}
+                        </div>
+                        <div className="grid grid-cols-2 gap-1 text-slate-300">
+                          {activeQuestion.options.map((o) => (
+                            <span key={o.id}>
+                              <strong className="text-amber-400">{o.id}.</strong> {o.text}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Time limit & explanation */}
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -1952,8 +2040,8 @@ function HostDashboard() {
                             </div>
 
                             <div className="flex items-center gap-2">
-                              <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 font-black text-[11px] text-amber-400">
-                                {sub.selectedOptionId}
+                              <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 font-black font-mono text-[11px] text-amber-400">
+                                {sub.submittedOrder ? sub.submittedOrder.join('') : sub.selectedOptionId}
                               </span>
                               <span className="font-mono text-slate-400 text-[11px]">
                                 {(sub.responseTimeMs / 1000).toFixed(3)}s

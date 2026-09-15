@@ -46,6 +46,7 @@ function CandidateArena() {
   // Candidate personal state
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
   const [isAnswerSubmitted, setIsAnswerSubmitted] = useState(false);
+  const [isTimerExpired, setIsTimerExpired] = useState(false);
   const [isRound1Revealed, setIsRound1Revealed] = useState(false);
   const [round1Results, setRound1Results] = useState<{
     correctAnswerId?: string;
@@ -208,6 +209,7 @@ function CandidateArena() {
       setActiveQuestion(question);
       setSelectedOption(null);
       setIsAnswerSubmitted(false);
+      setIsTimerExpired(false);
       setIsRound1Revealed(false);
       setRound1Results(null);
       sounds.playLock();
@@ -250,6 +252,7 @@ function CandidateArena() {
         questionPrompt: data.prompt,
       }));
       setCandidateBuzzerEvent(null);
+      setIsTimerExpired(false);
       sounds.playBuzzerEnabled();
     };
 
@@ -281,6 +284,7 @@ function CandidateArena() {
       setBuzzerSession(data.buzzerSession);
       setSelectedOption(null);
       setIsAnswerSubmitted(false);
+      setIsTimerExpired(false);
       setIsRound1Revealed(false);
       setRound1Results(null);
       setCandidateBuzzerEvent(null);
@@ -534,6 +538,7 @@ function CandidateArena() {
                           startedAt={activeQuestion.startedAt}
                           timeLimitSeconds={activeQuestion.timeLimitSeconds}
                           isActive={activeQuestion.status === 'ACTIVE' && !isAnswerSubmitted}
+                          onExpire={() => setIsTimerExpired(true)}
                           size="lg"
                         />
                       </div>
@@ -549,6 +554,7 @@ function CandidateArena() {
                       isSubmitted={isAnswerSubmitted}
                       isRevealed={isRound1Revealed}
                       correctAnswerId={round1Results?.correctAnswerId}
+                      disabled={isTimerExpired}
                     />
 
                     {/* Personal Rank on Reveal */}
@@ -631,6 +637,7 @@ function CandidateArena() {
                       startedAt={buzzerSession.enabledAt}
                       timeLimitSeconds={buzzerSession.timeLimitSeconds || 30}
                       isActive={buzzerSession.status === 'ACTIVE' && !candidateBuzzerEvent}
+                      onExpire={() => setIsTimerExpired(true)}
                       size="lg"
                     />
                   </div>
@@ -638,7 +645,7 @@ function CandidateArena() {
 
                 {/* Massive 3D Tactile Buzzer Component */}
                 <BuzzerButton
-                  status={buzzerSession?.status || 'DISABLED'}
+                  status={isTimerExpired ? 'CLOSED' : (buzzerSession?.status || 'DISABLED')}
                   onBuzz={handlePressBuzzer}
                   buzzerEvent={candidateBuzzerEvent}
                 />
